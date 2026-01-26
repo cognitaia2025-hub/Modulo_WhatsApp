@@ -16,10 +16,13 @@ Sistema inteligente de gestión de calendarios mediante WhatsApp con **memoria e
 
 ```bash
 # Script interactivo
-./quick_test.sh
+./tests/quick_test.sh
 
 # O manualmente
-python run_all_integration_tests.py --fast  # Solo tests críticos (8-10 min)
+python tests/run_all_integration_tests.py --fast  # Solo tests críticos (8-10 min)
+
+# Verificación rápida del sistema
+./tests/verify_system.sh
 ```
 
 ### 2. Iniciar el Sistema
@@ -44,25 +47,27 @@ curl http://localhost:8000/health
 
 ### 🌟 LECTURA OBLIGATORIA
 
-1. **[📊 RESUMEN_EJECUTIVO.md](RESUMEN_EJECUTIVO.md)** ⭐⭐⭐
+1. **[📊 RESUMEN_EJECUTIVO.md](docs/RESUMEN_EJECUTIVO.md)** ⭐⭐⭐
    - Problemas corregidos
    - Métricas de mejora
    - Estado del sistema
 
-2. **[📑 INDICE_DOCUMENTACION.md](INDICE_DOCUMENTACION.md)** ⭐⭐
+2. **[📑 INDICE_DOCUMENTACION.md](docs/INDICE_DOCUMENTACION.md)** ⭐⭐
    - Navegación completa de la documentación
    - Mapa de archivos
    - Flujo de trabajo recomendado
 
-3. **[🧪 GUIA_TESTS_Y_DEPLOYMENT.md](GUIA_TESTS_Y_DEPLOYMENT.md)** ⭐⭐
+3. **[🧪 GUIA_TESTS_Y_DEPLOYMENT.md](docs/GUIA_TESTS_Y_DEPLOYMENT.md)** ⭐⭐
    - Cómo ejecutar tests
    - Deployment a producción
    - Troubleshooting
 
 ### 📖 Documentación Técnica
 
-- [ANALISIS_Y_MEJORAS_PRODUCCION.md](ANALISIS_Y_MEJORAS_PRODUCCION.md) - Análisis técnico detallado
-- [COMANDOS_RAPIDOS.md](COMANDOS_RAPIDOS.md) - Referencia rápida de comandos
+- [ARQUITECTURA_GRAFO.md](docs/ARQUITECTURA_GRAFO.md) - Diagrama completo del sistema
+- [ANALISIS_Y_MEJORAS_PRODUCCION.md](docs/ANALISIS_Y_MEJORAS_PRODUCCION.md) - Análisis técnico detallado
+- [COMANDOS_RAPIDOS.md](docs/COMANDOS_RAPIDOS.md) - Referencia rápida de comandos
+- [REPORTE_EJECUCION_TESTS.md](docs/REPORTE_EJECUCION_TESTS.md) - Resultados de tests ejecutados
 
 ---
 

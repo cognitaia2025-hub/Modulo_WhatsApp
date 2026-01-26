@@ -3,26 +3,36 @@ from langchain.tools import tool
 from .utilities import ListGoogleCalendarEvents, CreateGoogleCalendarEvent, DeleteGoogleCalendarEvent, PostponeGoogleCalendarEvent
 from .utilities import api_resource
 from typing import TypedDict, cast
-from langchain_together import ChatTogether
+from langchain_openai import ChatOpenAI
 
 
 from dotenv import load_dotenv
 load_dotenv()  # this will load variables from .env into environment
 
 import os
-TOGETHER_API_KEY = os.getenv("TOGETHER_API_KEY")
-print("TOGETHER_API_KEY:", TOGETHER_API_KEY[:10], "...")  # for debug
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+print("DEEPSEEK_API_KEY:", DEEPSEEK_API_KEY[:10] if DEEPSEEK_API_KEY else "None", "...")  # for debug
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.StreamHandler()
+    ]
 )
+for handler in logging.root.handlers:
+    if isinstance(handler, logging.StreamHandler):
+        handler.stream.reconfigure(encoding='utf-8')
 logger = logging.getLogger(__name__)
 
-llm = ChatTogether(
-    model="meta-llama/Llama-3.3-70B-Instruct-Turbo-Free",
-    together_api_key=TOGETHER_API_KEY
+llm = ChatOpenAI(
+    model="deepseek-chat",
+    openai_api_key=DEEPSEEK_API_KEY,
+    openai_api_base="https://api.deepseek.com/v1",
+    temperature=0.7,
+    timeout=20.0,  # ⚠️ Timeout de 20 segundos
+    max_retries=0  # ✅ Reintentos los maneja LangGraph
 )
 
 @tool
@@ -41,7 +51,7 @@ def create_event_tool(start_datetime, end_datetime, summary, location="", descri
     Returns:
         str: Confirmation message with event link.
     """
-    timezone="Asia/Kolkata"
+    timezone="America/Tijuana"
     try:
         tool = CreateGoogleCalendarEvent(api_resource)
         result = tool._run(
@@ -72,7 +82,7 @@ def list_events_tool(start_datetime, end_datetime, max_results=10,):
     Returns:
         list: List of event dicts (each includes event ID, summary, times, etc.).
     """
-    timezone="Asia/Kolkata"
+    timezone="America/Tijuana"
     try:
         tool = ListGoogleCalendarEvents(api_resource)
         events = tool._run(
@@ -109,7 +119,7 @@ def postpone_event_tool(
     Returns:
         str: Confirmation message(s) or clarification prompt.
     """
-    timezone = "Asia/Kolkata"
+    timezone = "America/Tijuana"
     args = {
         "start_datetime": start_datetime,
         "end_datetime": end_datetime

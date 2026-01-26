@@ -3,18 +3,19 @@ from langchain_google_community import CalendarToolkit
 from googleapiclient.discovery import build
 from dateutil import parser, tz
 from datetime import datetime
+import pendulum
 from pydantic import BaseModel, Field
 from typing import Any, Dict, List, Optional, Type
 
 
 #Path of service account JSON key
-SERVICE_ACCOUNT_FILE = "/etc/secrets/service-account.json"
+SERVICE_ACCOUNT_FILE = "pro-core-466508-u7-381cfc0f5d01.json"
 
 #scope of calender access
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
-#Test Calender ID
-CALENDAR_ID = "60283bb03155968145ad69adbdb9891ab54720ff7509b44685ec088112ab5bb2@group.calendar.google.com"
+#Test Calender ID (LangGraph Calendar)
+CALENDAR_ID = "92d85be088b1ee5c2c47b2bd38ad8631fe555ca46d2566f56089e8d17ed9de5d@group.calendar.google.com"
 
 # create credential using service account
 credentials = service_account.Credentials.from_service_account_file(
@@ -44,29 +45,54 @@ class GetEventsSchema(BaseModel):
     start_datetime: str = Field(..., description="Start datetime (YYYY-MM-DDTHH:MM:SS)")
     end_datetime: str = Field(..., description="End datetime (YYYY-MM-DDTHH:MM:SS)")
     max_results: int = Field(default=10, description="Max results to return")
-    timezone: str = Field(default="Asia/Kolkata", description="Timezone (TZ database name)")
+    timezone: str = Field(default="America/Tijuana", description="Timezone (TZ database name)")
 
 class ListGoogleCalendarEvents(GoogleCalendarBaseTool):
     def _parse_event(self, event, timezone):
-        start = event['start'].get('dateTime', event['start'].get('date'))
-        start = parser.parse(start).astimezone(tz.gettz(timezone)).strftime('%Y/%m/%d %H:%M:%S')
-        end = event['end'].get('dateTime', event['end'].get('date'))
-        end = parser.parse(end).astimezone(tz.gettz(timezone)).strftime('%Y/%m/%d %H:%M:%S')
-        event_parsed = dict(start=start, end=end)
+        """
+        Parsea un evento de Google Calendar manejando eventos de todo el día y eventos con hora
+        """
+        # Detectar si es evento de todo el día
+        is_all_day = 'date' in event['start']  # Si tiene 'date' en vez de 'dateTime'
+        
+        if is_all_day:
+            # Evento de todo el día
+            start_date = event['start'].get('date')  # "2026-01-25"
+            end_date = event['end'].get('date')      # "2026-01-26"
+            
+            event_parsed = {
+                'start': start_date,
+                'end': end_date,
+                'is_all_day': True
+            }
+        else:
+            # Evento con hora específica
+            start = event['start'].get('dateTime')
+            start = parser.parse(start).astimezone(tz.gettz(timezone)).strftime('%Y/%m/%d %H:%M:%S')
+            end = event['end'].get('dateTime')
+            end = parser.parse(end).astimezone(tz.gettz(timezone)).strftime('%Y/%m/%d %H:%M:%S')
+            
+            event_parsed = {
+                'start': start,
+                'end': end,
+                'is_all_day': False
+            }
+        
+        # Agregar campos comunes
         for field in ['summary', 'description', 'location', 'hangoutLink']:
             event_parsed[field] = event.get(field, None)
-        # ADD THIS LINE:
         event_parsed['id'] = event.get('id')
+        
         return event_parsed
 
 
-    def _run(self, start_datetime, end_datetime, max_results=10, timezone="Asia/Kolkata"):
-        calendar_id = "60283bb03155968145ad69adbdb9891ab54720ff7509b44685ec088112ab5bb2@group.calendar.google.com"
+    def _run(self, start_datetime, end_datetime, max_results=10, timezone="America/Tijuana"):
+        calendar_id = "92d85be088b1ee5c2c47b2bd38ad8631fe555ca46d2566f56089e8d17ed9de5d@group.calendar.google.com"
         events = []
-        start = datetime.strptime(start_datetime, '%Y-%m-%dT%H:%M:%S')
-        start = start.replace(tzinfo=tz.gettz(timezone)).isoformat()
-        end = datetime.strptime(end_datetime, '%Y-%m-%dT%H:%M:%S')
-        end = end.replace(tzinfo=tz.gettz(timezone)).isoformat()
+        start = pendulum.parse(start_datetime, tz=timezone)
+        start = start.isoformat()
+        end = pendulum.parse(end_datetime, tz=timezone)
+        end = end.isoformat()
         events_result = self.api_resource.events().list(
             calendarId=calendar_id,
             timeMin=start,
@@ -88,15 +114,15 @@ class CreateEventSchema(BaseModel):
     summary: str = Field(..., description="Event title")
     location: Optional[str] = Field(default="", description="Event location")
     description: Optional[str] = Field(default="", description="Event description")
-    timezone: str = Field(default="Asia/Kolkata", description="Timezone (TZ database name)")
+    timezone: str = Field(default="America/Tijuana", description="Timezone (TZ database name)")
 
 class CreateGoogleCalendarEvent(GoogleCalendarBaseTool):
-    def _run(self, start_datetime, end_datetime, summary, location="", description="", timezone="Asia/Kolkata"):
-        calendar_id = "60283bb03155968145ad69adbdb9891ab54720ff7509b44685ec088112ab5bb2@group.calendar.google.com"
-        start = datetime.strptime(start_datetime, '%Y-%m-%dT%H:%M:%S')
-        start = start.replace(tzinfo=tz.gettz(timezone)).isoformat()
-        end = datetime.strptime(end_datetime, '%Y-%m-%dT%H:%M:%S')
-        end = end.replace(tzinfo=tz.gettz(timezone)).isoformat()
+    def _run(self, start_datetime, end_datetime, summary, location="", description="", timezone="America/Tijuana"):
+        calendar_id = "92d85be088b1ee5c2c47b2bd38ad8631fe555ca46d2566f56089e8d17ed9de5d@group.calendar.google.com"
+        start = pendulum.parse(start_datetime, tz=timezone)
+        start = start.isoformat()
+        end = pendulum.parse(end_datetime, tz=timezone)
+        end = end.isoformat()
         body = {
             'summary': summary,
             'start': {'dateTime': start},
@@ -126,7 +152,7 @@ class DeleteGoogleCalendarEvent:
 
     def __init__(self, api_resource):
         self.api_resource = api_resource
-        self.calendar_id = "60283bb03155968145ad69adbdb9891ab54720ff7509b44685ec088112ab5bb2@group.calendar.google.com"
+        self.calendar_id = "92d85be088b1ee5c2c47b2bd38ad8631fe555ca46d2566f56089e8d17ed9de5d@group.calendar.google.com"
 
     def _run(self, event_id, calendar_id=None):
         calendar_id = calendar_id or self.calendar_id
@@ -145,7 +171,7 @@ class PostponeEventSchema(BaseModel):
     event_id: str = Field(..., description="The event ID to postpone.")
     new_start_datetime: str = Field(..., description="New start datetime (YYYY-MM-DDTHH:MM:SS)")
     new_end_datetime: str = Field(..., description="New end datetime (YYYY-MM-DDTHH:MM:SS)")
-    timezone: str = Field(default="Asia/Kolkata", description="Timezone (TZ database name)")
+    timezone: str = Field(default="America/Tijuana", description="Timezone (TZ database name)")
     calendar_id: Optional[str] = Field(
         default=None, description="The calendar ID. Defaults to your test calendar."
     )
@@ -160,9 +186,9 @@ class PostponeGoogleCalendarEvent:
 
     def __init__(self, api_resource):
         self.api_resource = api_resource
-        self.calendar_id = "60283bb03155968145ad69adbdb9891ab54720ff7509b44685ec088112ab5bb2@group.calendar.google.com"
+        self.calendar_id = "92d85be088b1ee5c2c47b2bd38ad8631fe555ca46d2566f56089e8d17ed9de5d@group.calendar.google.com"
 
-    def _run(self, event_id, new_start_datetime, new_end_datetime, timezone="Asia/Kolkata", calendar_id=None):
+    def _run(self, event_id, new_start_datetime, new_end_datetime, timezone="America/Tijuana", calendar_id=None):
         calendar_id = calendar_id or self.calendar_id
         try:
             # Get the existing event
@@ -172,8 +198,8 @@ class PostponeGoogleCalendarEvent:
             ).execute()
 
             # Format new times
-            start = datetime.strptime(new_start_datetime, '%Y-%m-%dT%H:%M:%S').replace(tzinfo=tz.gettz(timezone)).isoformat()
-            end = datetime.strptime(new_end_datetime, '%Y-%m-%dT%H:%M:%S').replace(tzinfo=tz.gettz(timezone)).isoformat()
+            start = pendulum.parse(new_start_datetime, tz=timezone).isoformat()
+            end = pendulum.parse(new_end_datetime, tz=timezone).isoformat()
 
             event['start']['dateTime'] = start
             event['end']['dateTime'] = end

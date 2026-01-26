@@ -158,7 +158,7 @@ def update_semantic_memory(
                     description="Duración típica de reuniones en minutos"
                 )
 
-            prompt = f"""Analiza esta conversación y extrae SOLO nueva información sobre preferencias del usuario.
+            prompt = f"""Analiza esta conversación y extrae SOLO nueva información sobre preferencias del usuario en formato JSON.
 
 CONVERSACIÓN RECIENTE:
 {messages_text}
@@ -175,9 +175,19 @@ INSTRUCCIONES:
    - "Siempre uso un tono formal" → language_preference: "formal"
    - "Mis reuniones duran 30 minutos" → default_meeting_duration: 30
 
-Si NO hay nueva información relevante, devuelve todos los campos como null."""
+Si NO hay nueva información relevante, devuelve todos los campos como null.
+
+RESPONDE EN FORMATO JSON con la siguiente estructura:
+{{
+    "user_name": null o "nombre del usuario",
+    "timezone": null o "zona horaria",
+    "preferred_meeting_times": null o ["HH:MM-HH:MM"],
+    "language_preference": null o "formal/informal",
+    "default_meeting_duration": null o número_en_minutos
+}}"""
 
             # Invocar LLM con structured output (json_mode para compatibilidad con DeepSeek)
+            # Nota: el prompt ahora contiene "JSON" que es requerido por DeepSeek
             structured_llm = llm.with_structured_output(PreferencesUpdate, method="json_mode")
             response = structured_llm.invoke(prompt)
 

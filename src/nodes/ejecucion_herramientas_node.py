@@ -32,6 +32,7 @@ from src.tool import (
     create_event_tool,
     list_events_tool,
     postpone_event_tool,
+    update_event_tool,
     delete_event_tool
 )
 import json
@@ -72,7 +73,7 @@ llm_orquestador = llm_primary.with_fallbacks([llm_fallback])
 TOOL_MAPPING = {
     'create_calendar_event': create_event_tool,
     'list_calendar_events': list_events_tool,
-    'update_calendar_event': postpone_event_tool,  # Usa postpone para modificar
+    'update_calendar_event': update_event_tool,
     'delete_calendar_event': delete_event_tool,
     'postpone_calendar_event': postpone_event_tool
 }
@@ -197,10 +198,18 @@ CONTEXTO DE TIEMPO:
 MENSAJE DEL USUARIO:
 "{mensaje_usuario}"
 
+Instrucciones:
+1. Identifica qu\u00e9 evento quiere modificar el usuario (por nombre, descripci\u00f3n o ID)
+2. Extrae la nueva fecha y hora que el usuario quiere
+3. Si no menciona hora espec\u00edfica pero dice "tarde", usa 18:00
+4. Si dice "ma\u00f1ana", usa 10:00
+5. Si dice "noche", usa 20:00
+6. Calcula end_datetime como 1 hora despu\u00e9s del start_datetime
+
 Responde SOLO con JSON:
 {{
   "event_id": "..." o null,
-  "event_description": "descripción si no hay ID",
+  "event_description": "descripci\u00f3n del evento (ej: 'gimnasio')",
   "new_start_datetime": "YYYY-MM-DDTHH:MM:SS",
   "new_end_datetime": "YYYY-MM-DDTHH:MM:SS"
 }}
@@ -613,15 +622,18 @@ RESPUESTA:"""
     # Paso 2: Ejecutar herramientas
     resultados = []
     mensaje_usuario = extraer_ultimo_mensaje_usuario(state)
+    ultimo_listado = state.get('ultimo_listado', [])
     
     for tool_id in herramientas:
         logger.info(f"    🔧 Procesando: {tool_id}")
         
-        # NUEVA LÓGICA: Extraer parámetros con LLM
+        # PASO 1: Extraer parámetros con LLM
+        logger.info(f"    🔍 Extrayendo parámetros para {tool_id}...")
         parametros = extraer_parametros_con_llm(tool_id, mensaje_usuario, tiempo_contexto)
         
-        # Validar que tenemos parámetros mínimos
+        # PASO 2: Procesar según el tipo de herramienta
         if tool_id == 'create_calendar_event':
+            # Validar que tenemos parámetros mínimos
             if not parametros.get('summary') or not parametros.get('start_datetime'):
                 resultado = {
                     'success': False,
@@ -641,37 +653,85 @@ RESPUESTA:"""
             # Ya tiene parámetros por defecto (hoy)
             resultado = ejecutar_herramienta(tool_id, parametros)
             
-            # ✅ NUEVO: Guardar resultado en ultimo_listado para contexto futuro
+            # ✅ GUARDAR resultado en ultimo_listado para contexto futuro
             if resultado['success'] and isinstance(resultado.get('data'), list):
                 state['ultimo_listado'] = resultado['data']
                 logger.info(f"    💾 Guardado ultimo_listado con {len(resultado['data'])} eventos")
             
-        elif tool_id == 'delete_calendar_event':
-            # ✅ NUEVO: Usar ultimo_listado como contexto si no hay event_id
-            ultimo_listado = state.get('ultimo_listado', [])
-            
+        elif tool_id == 'update_calendar_event':
+            # ✅ NUEVO: Manejar update con contexto del listado
             if not parametros.get('event_id') and ultimo_listado:
-                # Intentar extraer event_id usando el contexto del listado
-                logger.info("    🔍 Buscando evento en ultimo_listado...")
+                logger.info("    🔍 Buscando evento en ultimo_listado para update...")
+                parametros_ctx = extraer_parametros_con_llm_delete(
+                    mensaje_usuario, 
+                    tiempo_contexto, 
+                    ultimo_listado
+                )
+                # Fusionar event_id encontrado con otros parámetros
+                if parametros_ctx.get('event_id'):
+                    parametros['event_id'] = parametros_ctx['event_id']
+            
+            # Validar que tenemos event_id y nueva fecha
+            if not parametros.get('event_id'):
+                resultado = {
+                    'success': False,
+                    'error': 'Necesito identificar el evento. ¿Puedes ser más específico?',
+                    'data': None,
+                    'tool_id': tool_id
+                }
+                resultados.append(resultado)
+                logger.warning(f"    ⚠️  No se pudo identificar event_id para update")
+                continue
+            
+            if not parametros.get('new_start_datetime'):
+                resultado = {
+                    'success': False,
+                    'error': 'Necesito saber la nueva fecha/hora del evento.',
+                    'data': None,
+                    'tool_id': tool_id
+                }
+                resultados.append(resultado)
+                logger.warning(f"    ⚠️  No se pudo extraer nueva fecha/hora")
+                continue
+            
+            resultado = ejecutar_herramienta(tool_id, parametros)
+            
+        elif tool_id == 'delete_calendar_event':
+            # ✅ USAR ultimo_listado como contexto si no hay event_id
+            if not parametros.get('event_id') and ultimo_listado:
+                logger.info("    🔍 Buscando evento en ultimo_listado para delete...")
                 parametros = extraer_parametros_con_llm_delete(
                     mensaje_usuario, 
                     tiempo_contexto, 
                     ultimo_listado
                 )
             
+            # Validar que tenemos event_id
             if not parametros.get('event_id'):
                 resultado = {
                     'success': False,
-                    'error': 'Necesito el ID del evento a eliminar. Primero lista tus eventos.',
+                    'error': 'Necesito el ID del evento a eliminar. Primero lista tus eventos con "¿qué tengo hoy?"',
                     'data': None,
                     'tool_id': tool_id
                 }
                 resultados.append(resultado)
+                logger.warning(f"    ⚠️  No se pudo identificar event_id para delete")
                 continue
             
             resultado = ejecutar_herramienta(tool_id, parametros)
             
         elif tool_id == 'postpone_calendar_event':
+            # Similar a update
+            if not parametros.get('event_id') and ultimo_listado:
+                logger.info("    🔍 Buscando evento en ultimo_listado para postpone...")
+                parametros_ctx = extraer_parametros_con_llm_delete(
+                    mensaje_usuario, 
+                    tiempo_contexto, 
+                    ultimo_listado
+                )
+                if parametros_ctx.get('event_id'):
+                    parametros['event_id'] = parametros_ctx['event_id']
+            
             if not parametros.get('event_id') or not parametros.get('new_start_datetime'):
                 resultado = {
                     'success': False,
@@ -680,6 +740,7 @@ RESPUESTA:"""
                     'tool_id': tool_id
                 }
                 resultados.append(resultado)
+                logger.warning(f"    ⚠️  Parámetros incompletos para postpone")
                 continue
             
             parametros['timezone'] = 'America/Tijuana'

@@ -182,81 +182,190 @@ def postpone_event_tool(
 
     return "\n".join(postponed_events)
 
+
 @tool
-def delete_event_tool(
-    start_datetime: str,
-    end_datetime: str,
-    user_query: str,
+def update_event_tool(
+    event_id: str,
+    new_start_datetime: str,
+    new_end_datetime: str = None,
+    new_summary: str = None,
+    new_location: str = None,
+    new_description: str = None,
 ) -> str:
     """
-    Delete a Google Calendar event based on a natural language user query.
-    Uses an LLM to select the correct event if the reference is ambiguous.
+    Update (modify) a Google Calendar event's time, title, location, or description.
+    
+    Args:
+        event_id: ID of the event to update
+        new_start_datetime: New start time (YYYY-MM-DDTHH:MM:SS)
+        new_end_datetime: New end time (optional, calculated from start if not provided)
+        new_summary: New title (optional)
+        new_location: New location (optional)
+        new_description: New description (optional)
+    
+    Returns:
+        Confirmation message with updated event details
     """
+    timezone = "America/Tijuana"
+    
+    try:
+        # Si no hay new_end_datetime, calcular 1 hora después del inicio
+        if not new_end_datetime:
+            import pendulum
+            start_dt = pendulum.parse(new_start_datetime, tz=timezone)
+            end_dt = start_dt.add(hours=1)
+            new_end_datetime = end_dt.format('YYYY-MM-DDTHH:mm:ss')
+        
+        # Obtener el evento actual
+        from .utilities import api_resource
+        calendar_id = "92d85be088b1ee5c2c47b2bd38ad8631fe555ca46d2566f56089e8d17ed9de5d@group.calendar.google.com"
+        
+        event = api_resource.events().get(
+            calendarId=calendar_id,
+            eventId=event_id
+        ).execute()
+        
+        # Actualizar campos según lo proporcionado
+        if new_start_datetime:
+            import pendulum
+            start = pendulum.parse(new_start_datetime, tz=timezone).isoformat()
+            event['start']['dateTime'] = start
+            event['start']['timeZone'] = timezone
+        
+        if new_end_datetime:
+            import pendulum
+            end = pendulum.parse(new_end_datetime, tz=timezone).isoformat()
+            event['end']['dateTime'] = end
+            event['end']['timeZone'] = timezone
+        
+        if new_summary:
+            event['summary'] = new_summary
+        
+        if new_location:
+            event['location'] = new_location
+        
+        if new_description:
+            event['description'] = new_description
+        
+        # Aplicar la actualización
+        updated_event = api_resource.events().update(
+            calendarId=calendar_id,
+            eventId=event_id,
+            body=event
+        ).execute()
+        
+        summary = updated_event.get('summary', 'Sin título')
+        start_time = updated_event['start'].get('dateTime', updated_event['start'].get('date'))
+        link = updated_event.get('htmlLink', '')
+        
+        logger.info(f"Evento actualizado: {summary} → {start_time}")
+        return f"✅ Evento actualizado: {summary} el {start_time}. {link}"
+        
+    except Exception as e:
+        logger.error(f"Error actualizando evento {event_id}: {e}")
+        return f"❌ Error actualizando evento: {e}"
+
+
+@tool
+def delete_event_tool(
+    event_id: str = None,
+    event_description: str = None,
+    start_datetime: str = None,
+    end_datetime: str = None,
+) -> str:
+    """
+    Delete a Google Calendar event by ID or description.
+    
+    Args:
+        event_id: Direct event ID to delete (preferred)
+        event_description: Description to search for event (requires start_datetime/end_datetime)
+        start_datetime: Start datetime for search window (if using event_description)
+        end_datetime: End datetime for search window (if using event_description)
+    
+    Returns:
+        Confirmation message or error
+    """
+    # Caso 1: Tenemos event_id directamente (path rápido)
+    if event_id:
+        try:
+            tool = DeleteGoogleCalendarEvent(api_resource)
+            result = tool._run(
+                event_id=str(event_id),
+                calendar_id=None
+            )
+            msg = f"✅ Evento eliminado (ID: {event_id}): {result}"
+            logger.info(msg)
+            return msg
+        except Exception as e:
+            msg = f"❌ Error eliminando evento `{event_id}`: {e}"
+            logger.error(msg)
+            return msg
+    
+    # Caso 2: Buscar evento por descripción (requiere ventana de tiempo)
+    if not event_description or not start_datetime or not end_datetime:
+        return "❌ Necesito el ID del evento o una descripción con rango de fechas para eliminarlo."
+    
     args = {
         "start_datetime": start_datetime,
         "end_datetime": end_datetime
     }
-    logger.info(f"Delete tool called with args: {args}")
+    logger.info(f"Delete tool buscando evento: {event_description} en {args}")
     events = list_events_tool.invoke(args)
+    
     if not events:
-        return "No events found in the specified time window."
+        return "❌ No se encontraron eventos en el rango especificado."
 
-    # Prepare event options for the LLM
+    # Preparar opciones para el LLM
     event_options = [
-        f"{idx+1}. {e.get('summary', 'No Title')} at {e.get('start')} (ID: {e.get('id')})"
+        f"{idx+1}. {e.get('summary', 'Sin título')} el {e.get('start')} (ID: {e.get('id')})"
         for idx, e in enumerate(events)
     ]
     options_text = "\n".join(event_options)
 
-    # Compose LLM prompt
+    # Prompt para el LLM
     prompt = (
-        f"User query: '{user_query}'\n"
-        f"Here are the events found:\n{options_text}\n"
-        "Based on the user's query, which event ID(s) best match the intent for deletion? "
-        "Just reply with the event ID(s) as a list."
+        f"Descripción del usuario: '{event_description}'\n"
+        f"Eventos encontrados:\n{options_text}\n"
+        "¿Qué evento(s) coincide(n) mejor con la descripción del usuario? "
+        "Responde SOLO con los event ID(s) como lista."
     )
 
-    # Call the LLM to select the best event
+    # Llamar al LLM para seleccionar el evento
     class output(TypedDict):
-        event_id: list[str]  
+        event_id: list[str]
 
     llm_response = cast(output, llm.with_structured_output(output).invoke(prompt))
     selected_event_ids = llm_response.get('event_id')
-    logger.info(f"Selected event IDs for deletion: {selected_event_ids}")
+    logger.info(f"Event IDs seleccionados para eliminación: {selected_event_ids}")
 
-    # Loop through all selected event IDs and delete each
+    # Eliminar cada evento seleccionado
     deleted_events = []
-
-    for event_id in selected_event_ids:  # This is now a list
-        # Find the event by exact match of ID
-        event = next((e for e in events if e.get('id') == event_id), None)
+    for eid in selected_event_ids:
+        event = next((e for e in events if e.get('id') == eid), None)
         if not event:
-            msg = f"❌ Event ID `{event_id}` not found."
+            msg = f"❌ Evento `{eid}` no encontrado."
             logger.warning(msg)
             deleted_events.append(msg)
             continue
 
         try:
             tool = DeleteGoogleCalendarEvent(api_resource)
-            result = tool._run(
-                event_id=str(event.get('id')),
-                calendar_id=None  # Defaults to 'primary' or configured calendar
-            )
-            msg = f"✅ Deleted event: **{event.get('summary', 'No Title')}** (`{event_id}`) → {result}"
+            result = tool._run(event_id=str(eid), calendar_id=None)
+            msg = f"✅ Eliminado: {event.get('summary', 'Sin título')} ({eid})"
             logger.info(msg)
             deleted_events.append(msg)
         except Exception as e:
-            msg = f"❌ Error deleting event `{event_id}`: {e}"
+            msg = f"❌ Error eliminando `{eid}`: {e}"
             logger.error(msg)
             deleted_events.append(msg)
 
-    # Return summary of all deletions
     return "\n".join(deleted_events)
 
 calendar_tools = [
     create_event_tool,
     list_events_tool,
     postpone_event_tool,
+    update_event_tool,
     delete_event_tool
 ]
 

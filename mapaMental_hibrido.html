@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>mapaMental_hibrido.md</title>
+<meta http-equiv="Content-type" content="text/html;charset=UTF-8">
+
+<style>
+/* https://github.com/microsoft/vscode/blob/master/extensions/markdown-language-features/media/markdown.css */
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+body {
+	font-family: var(--vscode-markdown-font-family, -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif);
+	font-size: var(--vscode-markdown-font-size, 14px);
+	padding: 0 26px;
+	line-height: var(--vscode-markdown-line-height, 22px);
+	word-wrap: break-word;
+}
+
+#code-csp-warning {
+	position: fixed;
+	top: 0;
+	right: 0;
+	color: white;
+	margin: 16px;
+	text-align: center;
+	font-size: 12px;
+	font-family: sans-serif;
+	background-color:#444444;
+	cursor: pointer;
+	padding: 6px;
+	box-shadow: 1px 1px 1px rgba(0,0,0,.25);
+}
+
+#code-csp-warning:hover {
+	text-decoration: none;
+	background-color:#007acc;
+	box-shadow: 2px 2px 2px rgba(0,0,0,.25);
+}
+
+body.scrollBeyondLastLine {
+	margin-bottom: calc(100vh - 22px);
+}
+
+body.showEditorSelection .code-line {
+	position: relative;
+}
+
+body.showEditorSelection .code-active-line:before,
+body.showEditorSelection .code-line:hover:before {
+	content: "";
+	display: block;
+	position: absolute;
+	top: 0;
+	left: -12px;
+	height: 100%;
+}
+
+body.showEditorSelection li.code-active-line:before,
+body.showEditorSelection li.code-line:hover:before {
+	left: -30px;
+}
+
+.vscode-light.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.15);
+}
+
+.vscode-light.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.40);
+}
+
+.vscode-light.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-dark.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.4);
+}
+
+.vscode-dark.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.60);
+}
+
+.vscode-dark.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-high-contrast.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 160, 0, 0.7);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 160, 0, 1);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+img {
+	max-width: 100%;
+	max-height: 100%;
+}
+
+a {
+	text-decoration: none;
+}
+
+a:hover {
+	text-decoration: underline;
+}
+
+a:focus,
+input:focus,
+select:focus,
+textarea:focus {
+	outline: 1px solid -webkit-focus-ring-color;
+	outline-offset: -1px;
+}
+
+hr {
+	border: 0;
+	height: 2px;
+	border-bottom: 2px solid;
+}
+
+h1 {
+	padding-bottom: 0.3em;
+	line-height: 1.2;
+	border-bottom-width: 1px;
+	border-bottom-style: solid;
+}
+
+h1, h2, h3 {
+	font-weight: normal;
+}
+
+table {
+	border-collapse: collapse;
+}
+
+table > thead > tr > th {
+	text-align: left;
+	border-bottom: 1px solid;
+}
+
+table > thead > tr > th,
+table > thead > tr > td,
+table > tbody > tr > th,
+table > tbody > tr > td {
+	padding: 5px 10px;
+}
+
+table > tbody > tr + tr > td {
+	border-top: 1px solid;
+}
+
+blockquote {
+	margin: 0 7px 0 5px;
+	padding: 0 16px 0 10px;
+	border-left-width: 5px;
+	border-left-style: solid;
+}
+
+code {
+	font-family: Menlo, Monaco, Consolas, "Droid Sans Mono", "Courier New", monospace, "Droid Sans Fallback";
+	font-size: 1em;
+	line-height: 1.357em;
+}
+
+body.wordWrap pre {
+	white-space: pre-wrap;
+}
+
+pre:not(.hljs),
+pre.hljs code > div {
+	padding: 16px;
+	border-radius: 3px;
+	overflow: auto;
+}
+
+pre code {
+	color: var(--vscode-editor-foreground);
+	tab-size: 4;
+}
+
+/** Theming */
+
+.vscode-light pre {
+	background-color: rgba(220, 220, 220, 0.4);
+}
+
+.vscode-dark pre {
+	background-color: rgba(10, 10, 10, 0.4);
+}
+
+.vscode-high-contrast pre {
+	background-color: rgb(0, 0, 0);
+}
+
+.vscode-high-contrast h1 {
+	border-color: rgb(0, 0, 0);
+}
+
+.vscode-light table > thead > tr > th {
+	border-color: rgba(0, 0, 0, 0.69);
+}
+
+.vscode-dark table > thead > tr > th {
+	border-color: rgba(255, 255, 255, 0.69);
+}
+
+.vscode-light h1,
+.vscode-light hr,
+.vscode-light table > tbody > tr + tr > td {
+	border-color: rgba(0, 0, 0, 0.18);
+}
+
+.vscode-dark h1,
+.vscode-dark hr,
+.vscode-dark table > tbody > tr + tr > td {
+	border-color: rgba(255, 255, 255, 0.18);
+}
+
+</style>
+
+<style>
+/* Tomorrow Theme */
+/* http://jmblog.github.com/color-themes-for-google-code-highlightjs */
+/* Original theme - https://github.com/chriskempson/tomorrow-theme */
+
+/* Tomorrow Comment */
+.hljs-comment,
+.hljs-quote {
+	color: #8e908c;
+}
+
+/* Tomorrow Red */
+.hljs-variable,
+.hljs-template-variable,
+.hljs-tag,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class,
+.hljs-regexp,
+.hljs-deletion {
+	color: #c82829;
+}
+
+/* Tomorrow Orange */
+.hljs-number,
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-literal,
+.hljs-type,
+.hljs-params,
+.hljs-meta,
+.hljs-link {
+	color: #f5871f;
+}
+
+/* Tomorrow Yellow */
+.hljs-attribute {
+	color: #eab700;
+}
+
+/* Tomorrow Green */
+.hljs-string,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-addition {
+	color: #718c00;
+}
+
+/* Tomorrow Blue */
+.hljs-title,
+.hljs-section {
+	color: #4271ae;
+}
+
+/* Tomorrow Purple */
+.hljs-keyword,
+.hljs-selector-tag {
+	color: #8959a8;
+}
+
+.hljs {
+	display: block;
+	overflow-x: auto;
+	color: #4d4d4c;
+	padding: 0.5em;
+}
+
+.hljs-emphasis {
+	font-style: italic;
+}
+
+.hljs-strong {
+	font-weight: bold;
+}
+</style>
+
+<style>
+/*
+ * Markdown PDF CSS
+ */
+
+ body {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif, "Meiryo";
+	padding: 0 12px;
+}
+
+pre {
+	background-color: #f8f8f8;
+	border: 1px solid #cccccc;
+	border-radius: 3px;
+	overflow-x: auto;
+	white-space: pre-wrap;
+	overflow-wrap: break-word;
+}
+
+pre:not(.hljs) {
+	padding: 23px;
+	line-height: 19px;
+}
+
+blockquote {
+	background: rgba(127, 127, 127, 0.1);
+	border-color: rgba(0, 122, 204, 0.5);
+}
+
+.emoji {
+	height: 1.4em;
+}
+
+code {
+	font-size: 14px;
+	line-height: 19px;
+}
+
+/* for inline code */
+:not(pre):not(.hljs) > code {
+	color: #C9AE75; /* Change the old color so it seems less like an error */
+	font-size: inherit;
+}
+
+/* Page Break : use <div class="page"/> to insert page break
+-------------------------------------------------------- */
+.page {
+	page-break-after: always;
+}
+
+</style>
+
+<script src="https://unpkg.com/mermaid/dist/mermaid.min.js"></script>
+</head>
+<body>
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: document.body.classList.contains('vscode-dark') || document.body.classList.contains('vscode-high-contrast')
+          ? 'dark'
+          : 'default'
+    });
+  </script>
+<h1 id="%F0%9F%93%8B-sistema-h%C3%ADbrido-calendario-personal--gesti%C3%B3n-m%C3%A9dica">📋 Sistema Híbrido: Calendario Personal + Gestión Médica</h1>
+<h2 id="%F0%9F%97%82%EF%B8%8F-diagrama-del-sistema-completo-bifurcado">🗂️ Diagrama del Sistema Completo Bifurcado</h2>
+<pre><code class="language-mermaid"><div class="mermaid">graph TD
+    %% Inicio del Flujo
+    START((Mensaje WhatsApp)) --> N0["<b>0. Identificación Usuario</b><br/>Extrae número teléfono<br/>Consulta BD usuarios<br/>Determina permisos"]
+    
+    %% Unificación inicial
+    N0 --> N1["<b>1. Nodo Caché</b><br/>¿Sesión Activa?<br/>TTL 24h por user_id<br/>Filtro automático FK"]
+    
+    N1 --> N2["<b>2. Filtrado Inteligente</b><br/>Clasificación de Solicitud<br/>Personal vs Médica vs Chat"]
+
+    %% ============================================================
+    %% BIFURCACIÓN A: CALENDARIO PERSONAL (Grafo Actual)
+    %% ============================================================
+    N2 -- "Calendario Personal<br/>eventos propios" --> N3A["<b>3A. Recuperación Personal</b><br/>Búsqueda en Memoria<br/>pgvector user_id filter<br/>Contexto individual"]
+    
+    N3A --> N4A["<b>4A. Herramientas Calendario</b><br/>6 tools Google Calendar<br/>ExtendedProperties user_id<br/>Filtro automático seguridad"]
+    
+    N4A --> N5A["<b>5A. Ejecución Personal</b><br/>Google Calendar API<br/>CRUD eventos personales<br/>Orquestador LLM"]
+    
+    N5A --> N6A["<b>6A. Resumen Personal</b><br/>Auditor LLM individual<br/>Preferencias + contexto<br/>Respuesta personalizada"]
+    
+    N6A --> N7A["<b>7A. Persistencia Personal</b><br/>memoria_episodica<br/>user_id + embeddings<br/>Metadatos personales"]
+
+    %% ============================================================
+    %% BIFURCACIÓN B: GESTIÓN MÉDICA (Nuevo Flujo)
+    %% ============================================================
+    N2 -- "Gestión Médica<br/>pacientes del doctor" --> N3B["<b>3B. Recuperación Médica</b><br/>BD citas_medicas<br/>JOIN con pacientes<br/>WHERE doctor_id = user_id"]
+    
+    N3B --> N4B["<b>4B. Herramientas Médicas</b><br/>8 tools BD clínicas<br/>CRUD pacientes + citas<br/>Validaciones médicas"]
+    
+    N4B --> N5B["<b>5B. Ejecución BD Médica</b><br/>Transacciones ACID<br/>Historiales + diagnósticos<br/>Integridad relacional"]
+    
+    N5B --> N8["<b>8. Sincronizador Híbrido</b><br/>BD → Google Calendar<br/>Worker automático<br/>Tolerancia a fallos"]
+    
+    N8 --> N6B["<b>6B. Resumen Médico</b><br/>LLM especializado clínico<br/>Terminología médica<br/>Protocolos HIPAA"]
+    
+    N6B --> N7B["<b>7B. Persistencia Médica</b><br/>Reutiliza Nodo 7A<br/>Contexto clínico<br/>Auditoría médica"]
+
+    %% ============================================================
+    %% BIFURCACIÓN C: CONVERSACIÓN SIMPLE
+    %% ============================================================
+    N2 -- "Chat Simple<br/>conversación casual" --> RESP["<b>Respuesta Directa</b><br/>LLM conversacional<br/>Sin herramientas<br/>Contexto social"]
+
+    %% ============================================================
+    %% CONVERGENCIA FINAL
+    %% ============================================================
+    N7A --> END((Respuesta al Usuario))
+    N7B --> END
+    RESP --> END
+
+    %% ============================================================
+    %% BASE DE DATOS HÍBRIDA RELACIONAL
+    %% ============================================================
+    subgraph DB["🗄️ Base de Datos PostgreSQL (puerto 5434) - Estructura Relacional"]
+        direction TB
+        
+        %% Tabla principal usuarios
+        DB_U["👥 usuarios (tabla principal)<br/>• phone_number VARCHAR(20) PK<br/>• display_name, es_admin BOOLEAN<br/>• tipo_usuario (personal/doctor)<br/>• especialidad, num_licencia<br/>• timezone, preferencias JSONB<br/>• created_at, last_seen"]
+        
+        %% Memoria episódica existente con FK
+        DB_V["📚 memoria_episodica<br/>• user_id VARCHAR FK→usuarios.phone_number<br/>• resumen TEXT, embedding vector(384)<br/>• contexto (personal/médico/mixto)<br/>• metadata JSONB, timestamp<br/>• Índice HNSW coseno + B-tree user_id"]
+        
+        %% Nueva: Pacientes del doctor
+        DB_PAC["👤 pacientes<br/>• id SERIAL PK<br/>• doctor_id VARCHAR FK→usuarios.phone_number<br/>• nombre, telefono UNIQUE, email<br/>• fecha_nacimiento, genero, direccion<br/>• contacto_emergencia JSONB<br/>• historial_medico JSONB<br/>• created_at, ultima_cita"]
+        
+        %% Nueva: Citas médicas
+        DB_CITAS["🏥 citas_medicas<br/>• id SERIAL PK<br/>• doctor_id VARCHAR FK→usuarios.phone_number<br/>• paciente_id INT FK→pacientes.id<br/>• fecha_hora TIMESTAMP, duracion INT<br/>• tipo_consulta, estado ENUM<br/>• diagnostico TEXT, tratamiento JSONB<br/>• google_event_id VARCHAR<br/>• notas_privadas TEXT"]
+        
+        %% Nueva: Sincronización automática
+        DB_SYNC["⚡ sincronizacion_calendar<br/>• id SERIAL PK<br/>• cita_id INT FK→citas_medicas.id<br/>• google_event_id VARCHAR<br/>• estado ENUM (pendiente/sync/error)<br/>• ultimo_intento TIMESTAMP<br/>• siguiente_reintento TIMESTAMP<br/>• error_message TEXT"]
+        
+        %% Herramientas ampliadas
+        DB_T["🔧 herramientas_disponibles<br/>EXISTENTES (6): Google Calendar<br/>• list_calendar_events<br/>• create_calendar_event<br/>• update/delete/postpone_event<br/>NUEVAS (8): Gestión Médica<br/>• crear_paciente, buscar_paciente<br/>• agendar_cita, modificar_cita<br/>• actualizar_historial<br/>• generar_reporte_doctor"]
+        
+        %% Auditoría con FK
+        DB_A["📊 auditoria_conversaciones<br/>• user_id VARCHAR FK→usuarios.phone_number<br/>• session_id, mensaje_tipo<br/>• contenido TEXT, timestamp<br/>• accion_realizada JSONB<br/>• ip_address, user_agent<br/>• Retención: 6 meses"]
+        
+        %% Sesiones con FK
+        DB_S["💾 user_sessions<br/>• phone_number VARCHAR FK→usuarios.phone_number<br/>• thread_id, last_activity<br/>• messages_count, session_data JSONB<br/>• TTL automático 24h<br/>• Limpieza por trigger"]
+    end
+
+    %% ============================================================
+    %% MEMORIA RAM TEMPORAL
+    %% ============================================================
+    subgraph MEM["🧠 Memoria RAM Temporal (Se reinicia con el sistema)"]
+        direction TB
+        
+        MEM_P["⚙️ Preferencias Usuario<br/>user_preferences por phone_number<br/>• zona_horaria_preferida<br/>• horarios_disponibles<br/>• notificaciones_activadas<br/>• configuracion_medica"]
+        
+        MEM_M["🩺 Contexto Médico Activo<br/>session_medica temporal<br/>• paciente_actual_en_consulta<br/>• historial_session JSONB<br/>• diagnostico_temporal<br/>• TTL = duración conversación"]
+        
+        MEM_C["📋 Cache Conversación<br/>state cache temporal<br/>• ultimo_listado_eventos<br/>• herramientas_seleccionadas<br/>• contexto_episodico_recuperado<br/>• Rolling window 10 mensajes"]
+    end
+
+    %% ============================================================
+    %% SERVICIOS EXTERNOS
+    %% ============================================================
+    subgraph EXT["🌐 Servicios Externos Cloud"]
+        direction TB
+        
+        %% LLMs especializados
+        LLM1["🧠 DeepSeek API<br/>Inteligencia Artificial Principal<br/>• Prompts personal + médico<br/>• Temp: 0.7, Timeout: 20-25s<br/>• Terminología clínica especializada<br/>• Fallback automático a Claude"]
+        
+        LLM2["🧠 Claude 3.5 Haiku<br/>IA Respaldo Universal<br/>• Temp: 0.7, Timeout: 15-20s<br/>• Respuestas de emergencia<br/>• Contexto personal + médico<br/>• Activación automática por timeout"]
+        
+        %% Google Calendar dual
+        GCAL["📅 Google Calendar API<br/>Cuenta de Servicio<br/>• USO DUAL:<br/>  1. Eventos personales directos<br/>  2. Vista visual citas médicas<br/>• Calendar ID: 92d85abc...<br/>• Timezone: America/Tijuana<br/>• ExtendedProperties para filtrado"]
+        
+        %% Embeddings locales
+        EMB["🔤 Procesador Embeddings<br/>sentence-transformers local<br/>• paraphrase-multilingual-MiniLM-L12-v2<br/>• 384 dimensiones normalizadas<br/>• CPU/GPU según disponibilidad<br/>• Contexto médico + personal"]
+    end
+
+    %% ============================================================
+    %% CONEXIONES FLUJO PERSONAL (Verde)
+    %% ============================================================
+    N0 -.->|"SELECT por phone_number"| DB_U
+    N1 -.->|"WHERE user_id = phone"| DB_S
+    N3A -.->|"búsqueda vectorial filtrada"| DB_V
+    N3A -.->|"genera embedding query"| EMB
+    N4A -.->|"herramientas personales"| DB_T
+    N4A -.->|"decisión LLM individual"| LLM1
+    N5A -.->|"eventos personales API"| GCAL
+    N5A -.->|"extrae parámetros"| LLM1
+    N5A -.->|"actualiza cache"| MEM_C
+    N6A -.->|"resumen personalizado"| LLM1
+    N6A -.->|"actualiza preferencias"| MEM_P
+    N7A -.->|"INSERT con user_id"| DB_V
+    N7A -.->|"embedding del resumen"| EMB
+    N7A -.->|"registro auditoría"| DB_A
+
+    %% ============================================================
+    %% CONEXIONES FLUJO MÉDICO (Morado)
+    %% ============================================================
+    N3B -.->|"JOIN doctor_id"| DB_PAC
+    N3B -.->|"WHERE doctor_id"| DB_CITAS
+    N4B -.->|"herramientas médicas"| DB_T
+    N4B -.->|"contexto clínico LLM"| LLM1
+    N5B -.->|"CRUD transaccional"| DB_CITAS
+    N5B -.->|"UPDATE historial"| DB_PAC
+    N5B -.->|"contexto temporal"| MEM_M
+    N8 -.->|"INSERT sincronización"| DB_SYNC
+    N8 -.->|"CREATE event médico"| GCAL
+    N6B -.->|"terminología médica"| LLM1
+    N6B -.->|"especialización clínica"| LLM2
+    N7B -.->|"memoria médica"| DB_V
+    N7B -.->|"auditoría HIPAA"| DB_A
+
+    %% ============================================================
+    %% CONEXIONES CHAT SIMPLE
+    %% ============================================================
+    RESP -.->|"conversación casual"| LLM1
+    RESP -.->|"backup conversacional"| LLM2
+
+    %% ============================================================
+    %% ESTILOS DIFERENCIADOS
+    %% ============================================================
+    classDef nodoNuevo fill:#FF5722,stroke:#BF360C,stroke-width:3px,color:#fff
+    classDef nodoPersonal fill:#4CAF50,stroke:#2E7D32,stroke-width:3px,color:#fff
+    classDef nodoMedico fill:#9C27B0,stroke:#6A1B9A,stroke-width:3px,color:#fff
+    classDef nodoDecision fill:#2196F3,stroke:#1565C0,stroke-width:3px,color:#fff
+    classDef nodoSync fill:#FF9800,stroke:#E65100,stroke-width:3px,color:#fff
+    classDef dbPrincipal fill:#E91E63,stroke:#880E4F,stroke-width:2px,color:#fff
+    classDef dbSecundaria fill:#00BCD4,stroke:#006064,stroke-width:2px,color:#fff
+    classDef servicioExterno fill:#607D8B,stroke:#37474F,stroke-width:2px,color:#fff
+    classDef memoriaRAM fill:#8BC34A,stroke:#558B2F,stroke-width:2px,color:#fff
+    
+    class N0 nodoNuevo
+    class N1,N3A,N4A,N5A,N6A,N7A nodoPersonal
+    class N3B,N4B,N5B,N6B,N7B nodoMedico
+    class N2 nodoDecision
+    class N8 nodoSync
+    class DB_U,DB_V dbPrincipal
+    class DB_CITAS,DB_PAC,DB_SYNC,DB_T,DB_A,DB_S dbSecundaria
+    class LLM1,LLM2,GCAL,EMB servicioExterno
+    class MEM_P,MEM_M,MEM_C memoriaRAM
+</div></code></pre>
+<hr>
+<h2 id="%F0%9F%93%96-explicaci%C3%B3n-del-sistema-h%C3%ADbrido-en-lenguaje-natural">📖 Explicación del Sistema Híbrido en Lenguaje Natural</h2>
+<h3 id="%F0%9F%8E%AF-%C2%BFqu%C3%A9-hace-este-sistema-mejorado">🎯 ¿Qué hace este sistema mejorado?</h3>
+<p>Imagina que tienes un asistente personal súper inteligente que no solo maneja tu calendario personal, sino que también puede funcionar como un sistema completo de gestión médica para doctores. Es como tener dos asistentes especializados en uno: un secretario personal para tus eventos privados y un asistente médico para gestionar pacientes y citas profesionales.</p>
+<h3 id="%F0%9F%94%80-%C2%BFc%C3%B3mo-funciona-la-bifurcaci%C3%B3n-inteligente">🔀 ¿Cómo funciona la bifurcación inteligente?</h3>
+<p>Cuando envías un mensaje por WhatsApp, el sistema es lo suficientemente inteligente para entender qué tipo de ayuda necesitas:</p>
+<h4 id="el-portero-inteligente-identificaci%C3%B3n-de-usuario"><strong>El Portero Inteligente (Identificación de Usuario)</strong></h4>
+<p>Antes que nada, el sistema identifica quién eres usando tu número de teléfono. Es como mostrar tu identificación en la entrada de un edificio. El sistema consulta su base de datos para saber si eres un usuario regular, un doctor, o el administrador del sistema.</p>
+<h4 id="el-director-de-tr%C3%A1fico-filtrado-inteligente"><strong>El Director de Tráfico (Filtrado Inteligente)</strong></h4>
+<p>Una vez que sabe quién eres, analiza tu mensaje para decidir hacia dónde dirigirte:</p>
+<ul>
+<li>Si hablas de &quot;mi cita del viernes&quot; → Flujo Personal (tu calendario privado)</li>
+<li>Si dices &quot;el paciente Juan necesita consulta&quot; → Flujo Médico (gestión profesional)</li>
+<li>Si solo saludas o conversas → Chat Simple (plática casual)</li>
+</ul>
+<h3 id="%F0%9F%9F%A2-flujo-personal-tu-calendario-privado">🟢 Flujo Personal: Tu Calendario Privado</h3>
+<p>Este es el sistema original que ya conoces, pero mejorado con identificación de usuario:</p>
+<h4 id="tu-memoria-personal"><strong>Tu Memoria Personal</strong></h4>
+<p>El sistema recuerda todas tus conversaciones anteriores, pero solo las tuyas. Es como tener un diario personal que solo tú puedes leer. Usa tu número de teléfono como llave para asegurarse de que nunca veas información de otras personas.</p>
+<h4 id="tus-herramientas-personales"><strong>Tus Herramientas Personales</strong></h4>
+<p>Tienes acceso a 6 herramientas para manejar tu calendario de Google:</p>
+<ul>
+<li>Crear eventos personales</li>
+<li>Ver tus próximas citas</li>
+<li>Buscar eventos específicos</li>
+<li>Modificar o cancelar citas</li>
+<li>Reprogramar cuando sea necesario</li>
+</ul>
+<h4 id="tu-google-calendar"><strong>Tu Google Calendar</strong></h4>
+<p>Todos tus eventos se crean con una etiqueta invisible que dice &quot;este evento pertenece a [tu número]&quot;, así el sistema siempre sabe qué eventos son tuyos.</p>
+<h3 id="%F0%9F%9F%A3-flujo-m%C3%A9dico-gesti%C3%B3n-profesional-de-pacientes">🟣 Flujo Médico: Gestión Profesional de Pacientes</h3>
+<p>Esta es la nueva funcionalidad para doctores que transforma el sistema en una clínica digital:</p>
+<h4 id="base-de-datos-m%C3%A9dica-completa"><strong>Base de Datos Médica Completa</strong></h4>
+<p>En lugar de depender solo de Google Calendar, el sistema tiene su propia base de datos médica con:</p>
+<ul>
+<li><strong>Registro de Pacientes</strong>: Nombres, teléfonos, historiales médicos completos</li>
+<li><strong>Citas Médicas</strong>: Fechas, diagnósticos, tratamientos, notas privadas</li>
+<li><strong>Sincronización</strong>: Automáticamente refleja las citas en Google Calendar para vista visual</li>
+</ul>
+<h4 id="herramientas-m%C3%A9dicas-especializadas"><strong>Herramientas Médicas Especializadas</strong></h4>
+<p>Los doctores tienen acceso a 8 herramientas médicas adicionales:</p>
+<ul>
+<li>Registrar nuevos pacientes</li>
+<li>Buscar historial médico de pacientes existentes</li>
+<li>Agendar citas con validaciones médicas</li>
+<li>Actualizar diagnósticos y tratamientos</li>
+<li>Generar reportes de seguimiento</li>
+<li>Modificar o cancelar citas profesionales</li>
+</ul>
+<h4 id="el-sincronizador-m%C3%A1gico"><strong>El Sincronizador Mágico</strong></h4>
+<p>Aquí está la innovación principal: cuando el doctor crea una cita médica, esta se guarda primero en la base de datos médica (que es la fuente de verdad), y después un proceso automático la sincroniza con Google Calendar para que el doctor pueda verla visualmente. Si Google Calendar falla, el sistema médico sigue funcionando perfectamente.</p>
+<h3 id="%F0%9F%94%84-%C2%BFc%C3%B3mo-funciona-la-arquitectura-h%C3%ADbrida">🔄 ¿Cómo funciona la arquitectura híbrida?</h3>
+<h4 id="dos-calendarios-en-uno"><strong>Dos Calendarios en Uno</strong></h4>
+<ul>
+<li><strong>Google Calendar Personal</strong>: El doctor crea sus eventos personales directamente aquí</li>
+<li><strong>Google Calendar Médico</strong>: Se sincroniza automáticamente desde la base de datos médica</li>
+</ul>
+<h4 id="seguridad-autom%C3%A1tica-multinivel"><strong>Seguridad Automática Multinivel</strong></h4>
+<ol>
+<li><strong>Por Usuario</strong>: Cada persona solo ve su propia información</li>
+<li><strong>Por Tipo</strong>: Los pacientes no pueden acceder a herramientas médicas</li>
+<li><strong>Por Doctor</strong>: Cada doctor solo ve sus propios pacientes</li>
+<li><strong>Por Contexto</strong>: La información personal y médica se mantiene separada</li>
+</ol>
+<h3 id="%F0%9F%97%84%EF%B8%8F-%C2%BFd%C3%B3nde-se-almacena-toda-esta-informaci%C3%B3n">🗄️ ¿Dónde se almacena toda esta información?</h3>
+<h4 id="base-de-datos-relacional-inteligente"><strong>Base de Datos Relacional Inteligente</strong></h4>
+<p>Todo está conectado como una red familiar:</p>
+<ul>
+<li><strong>Usuarios</strong> (la tabla principal con números de teléfono)</li>
+<li><strong>Pacientes</strong> (conectados a su doctor específico)</li>
+<li><strong>Citas Médicas</strong> (conectadas al doctor y al paciente)</li>
+<li><strong>Memoria de Conversaciones</strong> (separada por usuario)</li>
+<li><strong>Sincronización</strong> (control automático de Google Calendar)</li>
+</ul>
+<h4 id="memoria-temporal-especializada"><strong>Memoria Temporal Especializada</strong></h4>
+<ul>
+<li><strong>Contexto Personal</strong>: Tus preferencias de horarios y zona horaria</li>
+<li><strong>Contexto Médico</strong>: Información del paciente que se está atendiendo</li>
+<li><strong>Cache de Conversación</strong>: Los últimos mensajes para mantener el contexto</li>
+</ul>
+<h3 id="%F0%9F%8C%90-%C2%BFqu%C3%A9-servicios-externos-utiliza">🌐 ¿Qué servicios externos utiliza?</h3>
+<h4 id="inteligencia-artificial-especializada"><strong>Inteligencia Artificial Especializada</strong></h4>
+<ul>
+<li><strong>DeepSeek</strong>: El cerebro principal que entiende tanto lenguaje casual como terminología médica</li>
+<li><strong>Claude</strong>: El respaldo que entra en acción si DeepSeek está ocupado</li>
+<li>Ambos están entrenados para manejar tanto conversaciones personales como profesionales médicas</li>
+</ul>
+<h4 id="google-calendar-dual"><strong>Google Calendar Dual</strong></h4>
+<ul>
+<li><strong>Uso Personal</strong>: Eventos directos como antes</li>
+<li><strong>Uso Médico</strong>: Vista sincronizada de la base de datos médica</li>
+<li><strong>Filtrado Automático</strong>: Cada usuario solo ve sus propios eventos</li>
+</ul>
+<h3 id="%F0%9F%94%84-%C2%BFc%C3%B3mo-trabajan-todos-juntos-en-el-sistema-h%C3%ADbrido">🔄 ¿Cómo trabajan todos juntos en el sistema híbrido?</h3>
+<p>Imagina una clínica moderna con dos secciones:</p>
+<ol>
+<li><strong>Área Personal</strong>: Donde manejas tu agenda privada (lado derecho del cerebro)</li>
+<li><strong>Área Profesional</strong>: Donde atiendes pacientes y gestionas la clínica (lado izquierdo del cerebro)</li>
+<li><strong>Recepción Central</strong>: Que decide hacia dónde dirigir cada conversación</li>
+</ol>
+<p>El sistema automáticamente cambia entre estos modos según lo que necesites, pero siempre manteniendo toda la información segura y separada.</p>
+<h3 id="%F0%9F%8E%AA-la-magia-del-sistema-h%C3%ADbrido">🎪 La Magia del Sistema Híbrido</h3>
+<p>Lo que hace especial a esta nueva arquitectura es que combina:</p>
+<ul>
+<li><strong>Uso Personal y Profesional</strong> en un solo asistente</li>
+<li><strong>Seguridad Automática</strong> sin que tengas que preocuparte</li>
+<li><strong>Inteligencia Contextual</strong> que entiende cuándo hablas como persona vs. como doctor</li>
+<li><strong>Sincronización Perfecta</strong> entre base de datos médica y vista visual</li>
+<li><strong>Tolerancia a Fallos</strong> - si Google falla, la clínica sigue funcionando</li>
+<li><strong>Escalabilidad</strong> - puede manejar desde un doctor hasta una clínica completa</li>
+</ul>
+<p>Todo esto funciona las 24 horas del día, los 7 días de la semana, desde WhatsApp, convirtiendo tu teléfono en una clínica digital completa sin perder la simplicidad de un asistente personal.</p>
+
+</body>
+</html>

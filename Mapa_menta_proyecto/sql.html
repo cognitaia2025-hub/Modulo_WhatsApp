@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQL - Mapa Mental</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+        }
+        
+        .back-button {
+            display: inline-block;
+            background: rgba(255,255,255,0.2);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 10px;
+            text-decoration: none;
+            margin-bottom: 20px;
+            transition: all 0.3s ease;
+        }
+        
+        .back-button:hover {
+            background: rgba(255,255,255,0.3);
+            transform: translateX(-5px);
+        }
+        
+        h1 {
+            font-size: 3rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .subtitle {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .files-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 25px;
+        }
+        
+        .file-card {
+            background: white;
+            border-radius: 15px;
+            padding: 30px 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+        
+        .file-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+        }
+        
+        .file-icon {
+            font-size: 3.5rem;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+        
+        .file-name {
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #333;
+            text-align: center;
+            word-break: break-word;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="index.html" class="back-button">← Volver</a>
+            <h1>🗄️ SQL</h1>
+            <p class="subtitle">Scripts de Base de Datos</p>
+        </div>
+        
+        <div class="files-grid">
+            <div class="file-card">
+                <div class="file-icon">📋</div>
+                <div class="file-name">init_database.sql</div>
+            </div>
+            
+            <div class="file-card">
+                <div class="file-icon">🔧</div>
+                <div class="file-name">setup_herramientas.sql</div>
+            </div>
+            
+            <div class="file-card">
+                <div class="file-icon">🧠</div>
+                <div class="file-name">setup_memoria_episodica.sql</div>
+            </div>
+            
+            <div class="file-card">
+                <div class="file-icon">👥</div>
+                <div class="file-name">setup_user_sessions.sql</div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

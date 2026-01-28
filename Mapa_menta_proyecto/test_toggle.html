@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        .component-sections {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.7s ease;
+            background: lightblue;
+            padding: 0;
+        }
+        
+        .component-sections.expanded {
+            max-height: 1000px;
+            padding: 20px;
+        }
+        
+        .component-toggle-header {
+            background: lightgray;
+            padding: 20px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <h1>Test de Toggle</h1>
+    
+    <div>
+        <div class="component-toggle-header" onclick="toggleComponent('test1')">
+            Click aquí para abrir
+        </div>
+        <div class="component-sections" id="comp-content-test1">
+            <p>Este contenido debe aparecer cuando hagas click arriba</p>
+            <p>Línea 2</p>
+            <p>Línea 3</p>
+        </div>
+    </div>
+    
+    <script>
+        function toggleComponent(componentId) {
+            const content = document.getElementById('comp-content-' + componentId);
+            console.log('Toggle llamado con ID:', componentId);
+            console.log('Elemento encontrado:', content);
+            
+            if (content.classList.contains('expanded')) {
+                content.classList.remove('expanded');
+                console.log('Cerrando');
+            } else {
+                content.classList.add('expanded');
+                console.log('Abriendo');
+            }
+        }
+    </script>
+</body>
+</html>

@@ -101,14 +101,19 @@ def nodo_cache(state: WhatsAppAgentState) -> WhatsAppAgentState:
 
 def nodo_filtrado(state: WhatsAppAgentState) -> WhatsAppAgentState:
     """
-    [2] Nodo Gatekeeper - Detector de Necesidad de Contexto Externo
+    [2] Nodo Gatekeeper - Detector de Intención de Herramientas
     
-    Determina si el mensaje del usuario requiere:
-    - Consultar memoria episódica (conversaciones pasadas)
-    - Usar herramientas (Google Calendar, búsquedas)
-    - O si es solo conversacional (saludos, despedidas, agradecimientos)
+    Determina si el mensaje del usuario requiere usar alguna de las 6 herramientas:
+    - create_calendar_event
+    - list_calendar_events
+    - search_calendar_events
+    - update_calendar_event
+    - delete_calendar_event
+    - postpone_calendar_event
     
-    OPTIMIZACIÓN: Solo cuando es necesario, el bot activa Nodos 3 y 4.
+    También evalúa si necesita consultar memoria episódica (conversaciones pasadas).
+    
+    OPTIMIZACIÓN: Solo cuando detecta intención de herramientas, activa Nodos 3 y 4.
     Esto ahorra tokens, tiempo de respuesta y carga en embeddings/PostgreSQL.
     """
     logger.info("🚪 [2] NODO_GATEKEEPER - Detectando necesidad de contexto externo")
@@ -117,10 +122,10 @@ def nodo_filtrado(state: WhatsAppAgentState) -> WhatsAppAgentState:
     num_mensajes = len(messages)
     logger.info(f"    Mensajes en historial: {num_mensajes}")
     
-    # Caso 1: Primer mensaje → asumir que necesita contexto
+    # Caso 1: Primer mensaje → asumir que puede necesitar herramientas
     if num_mensajes < 1:
-        logger.info("    ⚡ Primer mensaje, asumiendo que requiere contexto")
-        state['cambio_de_tema'] = True  # Reutilizamos la variable (podríamos renombrar a 'requiere_contexto')
+        logger.info("    ⚡ Primer mensaje, asumiendo que puede requerir herramientas")
+        state['requiere_herramientas'] = True
         return state
     
     # Extraer último mensaje
@@ -169,8 +174,8 @@ def nodo_filtrado(state: WhatsAppAgentState) -> WhatsAppAgentState:
         # Continuar al análisis con LLM (no retornar aquí)
     elif es_mensaje_corto and contiene_palabra_no_accionable:
         logger.info(f"    ⚡ Mensaje conversacional detectado: '{contenido[:50]}...'")
-        logger.info("    ↪️  NO requiere contexto → Directo al Orquestador")
-        state['cambio_de_tema'] = False
+        logger.info("    ↪️  NO requiere herramientas → Directo al Orquestador")
+        state['requiere_herramientas'] = False
         return state
     
     # Caso 3: Análisis con LLM para mensajes complejos
@@ -188,41 +193,54 @@ def nodo_filtrado(state: WhatsAppAgentState) -> WhatsAppAgentState:
             max_retries=0
         )
         
-        # Prompt mejorado enfocado en "necesidad de contexto"
-        prompt = f"""Analiza el siguiente mensaje del usuario y determina si requiere información externa o acciones.
+        # Prompt específico para detección de intención de herramientas
+        prompt = f"""Analiza el siguiente mensaje del usuario y determina si requiere usar alguna de las herramientas de Google Calendar.
 
 MENSAJE DEL USUARIO:
 "{contenido}"
 
-CATEGORÍAS DE HERRAMIENTAS DISPONIBLES:
-- Google Calendar (crear, listar, modificar, eliminar eventos)
-- Memoria de conversaciones pasadas
+HERRAMIENTAS DISPONIBLES (6):
+1. create_calendar_event - Crear nuevos eventos/citas
+2. list_calendar_events - Ver eventos en un rango de fechas
+3. search_calendar_events - Buscar eventos por palabra clave
+4. update_calendar_event - Modificar eventos existentes
+5. delete_calendar_event - Eliminar eventos
+6. postpone_calendar_event - Posponer/reagendar eventos
 
-¿Este mensaje requiere realizar una ACCIÓN o consultar INFORMACIÓN?
+¿El usuario tiene INTENCIÓN de usar alguna de estas herramientas?
 
-Responde 'TRUE' si el mensaje:
-- Pide ver/crear/modificar/eliminar eventos del calendario
-- Pregunta por información de charlas pasadas
-- Solicita recordatorios, fechas, datos específicos
-- Requiere cualquier acción con herramientas
+Responde 'TRUE' si detectas intención de:
+- Crear, agendar, programar eventos ("agenda una cita", "crea un evento")
+- Ver, listar eventos futuros ("qué tengo mañana", "mis citas de la semana")
+- Buscar eventos específicos ("busca mi cita con García", "¿cuándo es mi dentista?")
+- Modificar eventos ("cambia la hora", "actualiza la cita")
+- Eliminar eventos ("cancela mi cita", "borra el evento")
+- Mover/posponer eventos ("mueve la reunión", "pospón para mañana")
+- Consultar memoria de conversaciones pasadas sobre calendario
 
-Responde 'FALSE' si el mensaje:
-- Es solo un saludo, despedida o agradecimiento
-- Es una confirmación simple (ok, vale, entendido)
-- Es un comentario que no requiere datos nuevos
-- No pide ninguna acción específica
+Responde 'FALSE' si el mensaje es:
+- Saludo/despedida sin acción ("hola", "gracias", "adiós")
+- Confirmación simple ("ok", "perfecto", "entendido")
+- Conversación general sin intención de calendario
+- Respuesta a pregunta del asistente sin nueva acción
 
 EJEMPLOS TRUE:
-- "¿Qué eventos tengo mañana?"
-- "Recuérdame lo que hablamos ayer"
-- "Agéndame una cita para el jueves"
-- "¿Qué tenía que hacer hoy?"
+- "¿Tengo citas hoy?"
+- "Agenda reunión con García mañana a las 10"
+- "Busca mis eventos de dentista"
+- "Cancela la cita del viernes"
+- "Sí, para mañana" (cuando se preguntó sobre ver eventos de otro día)
+- "¿Cuándo es mi próxima cita?"
+- "Mueve mi cita de las 3 a las 5"
+- "¿Qué tengo el lunes?"
 
 EJEMPLOS FALSE:
 - "Gracias"
 - "Vale, perfecto"
 - "Hola, ¿cómo estás?"
 - "Entendido, adiós"
+- "Ok, muchas gracias"
+- "Sí" (como confirmación simple sin contexto de herramientas)
 
 Responde ÚNICAMENTE: 'True' o 'False'
 
@@ -234,17 +252,17 @@ Respuesta:"""
         
         # Parsear respuesta
         if 'true' in respuesta:
-            state['cambio_de_tema'] = True
-            logger.info("    ✓ LLM: REQUIERE CONTEXTO → Activará Memoria y Herramientas")
+            state['requiere_herramientas'] = True
+            logger.info("    ✓ LLM: DETECTA INTENCIÓN DE HERRAMIENTAS → Activará Memoria y Herramientas")
         else:
-            state['cambio_de_tema'] = False
-            logger.info("    ✓ LLM: NO REQUIERE CONTEXTO → Directo al Orquestador")
+            state['requiere_herramientas'] = False
+            logger.info("    ✓ LLM: NO REQUIERE HERRAMIENTAS → Directo al Orquestador")
         
     except Exception as e:
-        # Fallback: en caso de error, asumir que SÍ requiere contexto (más seguro)
+        # Fallback: en caso de error, asumir que SÍ requiere herramientas (más seguro)
         logger.warning(f"    ⚠️  Error en LLM de filtrado: {e}")
-        logger.info("    ⚡ Fallback: Asumiendo que requiere contexto (seguro)")
-        state['cambio_de_tema'] = True
+        logger.info("    ⚡ Fallback: Asumiendo que requiere herramientas (seguro)")
+        state['requiere_herramientas'] = True
     
     return state
 
@@ -289,20 +307,20 @@ Respuesta:"""
 
 def decidir_flujo(state: WhatsAppAgentState) -> str:
     """
-    Decide el siguiente nodo basándose en si requiere contexto externo.
+    Decide el siguiente nodo basándose en si detectó intención de usar herramientas.
     
-    LÓGICA MEJORADA (Gatekeeper):
-    - Si requiere contexto (True) → Activa Nodo 3 (Memoria) → Nodo 4 (Herramientas)
-    - Si NO requiere contexto (False) → Directo al Nodo 5 (Orquestador conversacional)
+    LÓGICA DE DETECCIÓN DE INTENCIÓN:
+    - Si requiere herramientas (True) → Activa Nodo 3 (Memoria) → Nodo 4 (Selección Herramientas)
+    - Si NO requiere herramientas (False) → Directo al Nodo 5 (Orquestador conversacional)
     
     Returns:
-        "recuperacion_episodica" si requiere contexto (acciones o datos)
-        "ejecucion_herramientas" si no requiere contexto (solo conversación, sin herramientas)
+        "recuperacion_episodica" si detectó intención de herramientas de calendario
+        "ejecucion_herramientas" si es solo conversacional (sin herramientas)
     """
-    requiere_contexto = state.get('cambio_de_tema', False)  # TODO: Renombrar variable a 'requiere_contexto'
+    requiere_herramientas = state.get('requiere_herramientas', False)
     
-    if requiere_contexto:
-        logger.info("    ↪️  Flujo: REQUIERE CONTEXTO → Activando Memoria + Herramientas")
+    if requiere_herramientas:
+        logger.info("    ↪️  Flujo: INTENCIÓN DE HERRAMIENTAS DETECTADA → Activando Memoria + Selección")
         return "recuperacion_episodica"
     else:
         logger.info("    ↪️  Flujo: SOLO CONVERSACIONAL → Directo a Orquestador (ahorro de recursos)")
@@ -445,7 +463,7 @@ if __name__ == "__main__":
     
     print("\n" + "="*70)
     print("✅ RESULTADO PRUEBA 1:")
-    print(f"   - Cambio de tema: {resultado_1.get('cambio_de_tema')}")
+    print(f"   - Requiere herramientas: {resultado_1.get('requiere_herramientas')}")
     print(f"   - Herramientas seleccionadas: {resultado_1.get('herramientas_seleccionadas')}")
     print(f"   - Resumen generado: {resultado_1.get('resumen_actual')}")
     print("="*70 + "\n")
@@ -474,7 +492,7 @@ if __name__ == "__main__":
     
     print("\n" + "="*70)
     print("✅ RESULTADO PRUEBA 2:")
-    print(f"   - Cambio de tema: {resultado_2.get('cambio_de_tema')}")
+    print(f"   - Requiere herramientas: {resultado_2.get('requiere_herramientas')}")
     print(f"   - Herramientas seleccionadas: {resultado_2.get('herramientas_seleccionadas')}")
     print(f"   - Resumen generado: {resultado_2.get('resumen_actual')}")
     print("="*70 + "\n")
@@ -483,5 +501,5 @@ if __name__ == "__main__":
     print("🎉 PRUEBAS COMPLETADAS")
     print("="*70)
     print("\nEl grafo recorre correctamente los 7 nodos en el orden esperado.")
-    print("La bifurcación condicional funciona basándose en 'cambio_de_tema'.")
+    print("La bifurcación condicional funciona basándose en 'requiere_herramientas'.")
     print("\n✅ Esqueleto validado - Listo para implementar lógica real.\n")

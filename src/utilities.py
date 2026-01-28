@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Type
 
 
 #Path of service account JSON key
-SERVICE_ACCOUNT_FILE = "pro-core-466508-u7-381cfc0f5d01.json"
+SERVICE_ACCOUNT_FILE = "pro-core-466508-u7-76f56aed8c8b.json"
 
 #scope of calender access
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
@@ -215,6 +215,91 @@ class PostponeGoogleCalendarEvent:
             return f"Event postponed: {updated_event.get('htmlLink', 'No link')}"
         except Exception as e:
             return f"Failed to postpone event: {e}"
+
+
+class SearchEventSchema(BaseModel):
+    """Schema para búsqueda de eventos por palabras clave."""
+    start_datetime: str = Field(..., description="Start datetime (YYYY-MM-DDTHH:MM:SS)")
+    end_datetime: str = Field(..., description="End datetime (YYYY-MM-DDTHH:MM:SS)")
+    query: str = Field(..., description="Search keywords (e.g., patient name, event type)")
+    max_results: int = Field(default=10, description="Max results to return")
+    timezone: str = Field(default="America/Tijuana", description="Timezone (TZ database name)")
+
+
+class SearchGoogleCalendarEvents(GoogleCalendarBaseTool):
+    """
+    Search events in Google Calendar by keywords.
+
+    - Searches in event title and description.
+    - Returns events matching the query within the specified time range.
+    """
+
+    def _parse_event(self, event, timezone):
+        """
+        Parsea un evento de Google Calendar manejando eventos de todo el día y eventos con hora.
+        """
+        is_all_day = 'date' in event['start']
+
+        if is_all_day:
+            event_parsed = {
+                'start': event['start'].get('date'),
+                'end': event['end'].get('date'),
+                'is_all_day': True
+            }
+        else:
+            start = event['start'].get('dateTime')
+            start = parser.parse(start).astimezone(tz.gettz(timezone)).strftime('%Y/%m/%d %H:%M:%S')
+            end = event['end'].get('dateTime')
+            end = parser.parse(end).astimezone(tz.gettz(timezone)).strftime('%Y/%m/%d %H:%M:%S')
+
+            event_parsed = {
+                'start': start,
+                'end': end,
+                'is_all_day': False
+            }
+
+        for field in ['summary', 'description', 'location', 'hangoutLink']:
+            event_parsed[field] = event.get(field, None)
+        event_parsed['id'] = event.get('id')
+
+        return event_parsed
+
+    def _run(self, start_datetime, end_datetime, query, max_results=10, timezone="America/Tijuana"):
+        """
+        Busca eventos en Google Calendar por palabras clave.
+
+        Args:
+            start_datetime: Inicio del rango de búsqueda (YYYY-MM-DDTHH:MM:SS)
+            end_datetime: Fin del rango de búsqueda (YYYY-MM-DDTHH:MM:SS)
+            query: Palabras clave para buscar en título/descripción
+            max_results: Máximo de resultados
+            timezone: Zona horaria
+
+        Returns:
+            Lista de eventos que coinciden con la búsqueda
+        """
+        calendar_id = CALENDAR_ID
+
+        start = pendulum.parse(start_datetime, tz=timezone)
+        start = start.isoformat()
+        end = pendulum.parse(end_datetime, tz=timezone)
+        end = end.isoformat()
+
+        events_result = self.api_resource.events().list(
+            calendarId=calendar_id,
+            timeMin=start,
+            timeMax=end,
+            q=query,  # Búsqueda por palabras clave
+            maxResults=max_results,
+            singleEvents=True,
+            orderBy='startTime'
+        ).execute()
+
+        cal_events = events_result.get('items', [])
+        events = sorted(cal_events, key=lambda x: x['start'].get('dateTime', x['start'].get('date')))
+
+        return [self._parse_event(e, timezone) for e in events]
+
 
 if __name__ == '__main__':
     print("All okay")

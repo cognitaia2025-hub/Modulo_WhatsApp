@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mapa Mental - Calender Agent</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            text-align: center;
+            max-width: 1200px;
+            width: 100%;
+        }
+        
+        h1 {
+            color: white;
+            font-size: 3rem;
+            margin-bottom: 20px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .subtitle {
+            color: rgba(255,255,255,0.9);
+            font-size: 1.2rem;
+            margin-bottom: 60px;
+        }
+        
+        .folders-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 40px;
+            margin-top: 40px;
+        }
+        
+        .folder-card {
+            background: white;
+            border-radius: 20px;
+            padding: 50px 30px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            text-decoration: none;
+            color: inherit;
+            display: block;
+        }
+        
+        .folder-card:hover {
+            transform: translateY(-10px);
+            box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+        }
+        
+        .folder-icon {
+            font-size: 5rem;
+            margin-bottom: 20px;
+        }
+        
+        .folder-name {
+            font-size: 1.8rem;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        .folder-description {
+            font-size: 1rem;
+            color: #666;
+            line-height: 1.5;
+        }
+        
+        .sql-card {
+            border-top: 5px solid #e74c3c;
+        }
+        
+        .src-card {
+            border-top: 5px solid #3498db;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📊 Calender Agent</h1>
+        <p class="subtitle">Explorador de Estructura del Proyecto</p>
+        
+        <div class="folders-grid">
+            <a href="sql.html" class="folder-card sql-card">
+                <div class="folder-icon">🗄️</div>
+                <div class="folder-name">SQL</div>
+                <div class="folder-description">
+                    Scripts de base de datos, esquemas y configuraciones
+                </div>
+            </a>
+            
+            <a href="src.html" class="folder-card src-card">
+                <div class="folder-icon">💻</div>
+                <div class="folder-name">SRC</div>
+                <div class="folder-description">
+                    Código fuente del proyecto, módulos y lógica principal
+                </div>
+            </a>
+        </div>
+    </div>
+</body>
+</html>

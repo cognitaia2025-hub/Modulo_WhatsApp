@@ -319,7 +319,7 @@ async def handle_whatsapp_message(request):
         'messages': [HumanMessage(content=message_text)],
         'user_id': user_id,
         'session_id': thread_id,  # Importante: usar thread_id
-        'cambio_de_tema': False,
+        'requiere_herramientas': False,
         'sesion_expirada': False,
         'herramientas_seleccionadas': [],
         'resumen_actual': None,

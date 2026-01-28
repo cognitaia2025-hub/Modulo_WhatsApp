@@ -1,0 +1,345 @@
+====================================================================================================
+TEST REPORT - AI CALENDAR AGENT
+====================================================================================================
+
+Fecha: 2026-01-24 03:52:22
+Duración total: 240.15s
+
+----------------------------------------------------------------------------------------------------
+Test: ⚙️  Configuración y Variables de Entorno
+Archivo: test_config_check.py
+Status: FAILED
+Duración: 0.06s
+Exit Code: 1
+
+Output:
+================================================================================
+  TEST RÁPIDO DE CONFIGURACIÓN
+================================================================================
+
+Verificando que el sistema esté listo para test E2E...
+
+
+
+Stderr:
+Traceback (most recent call last):
+  File "C:\Users\Salva\OneDrive\Escritorio\agent_calendar\Calender-agent\test_config_check.py", line 143, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "C:\Users\Salva\OneDrive\Escritorio\agent_calendar\Calender-agent\test_config_check.py", line 112, in main
+    imports_ok = check_imports()
+                 ^^^^^^^^^^^^^^^
+  File "C:\Users\Salva\OneDrive\Escritorio\agent_calendar\Calender-agent\test_config_check.py", line 15, in check_imports
+    print("\U0001f50d Verificando imports...")
+  File "C:\Users\Salva\AppData\Local\Programs\Python\Python312\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f50d' in position 0: character maps to <undefined>
+
+
+----------------------------------------------------------------------------------------------------
+Test: 🧠 Sistema de Memoria (Embeddings)
+Archivo: test_memory.py
+Status: FAILED
+Duración: 0.89s
+Exit Code: 1
+
+Stderr:
+Traceback (most recent call last):
+  File "C:\Users\Salva\OneDrive\Escritorio\agent_calendar\Calender-agent\test_memory.py", line 7, in <module>
+    from src.memory import (
+ImportError: cannot import name 'get_instruction_version' from 'src.memory' (C:\Users\Salva\OneDrive\Escritorio\agent_calendar\Calender-agent\src\memory\__init__.py)
+
+
+----------------------------------------------------------------------------------------------------
+Test: 🐘 Integración PostgreSQL
+Archivo: test_postgresql_integration.py
+Status: FAILED
+Duración: 0.42s
+Exit Code: 1
+
+Output:
+
+================================================================================
+
+
+Stderr:
+Traceback (most recent call last):
+  File "C:\Users\Salva\OneDrive\Escritorio\agent_calendar\Calender-agent\test_postgresql_integration.py", line 381, in <module>
+    exit_code = main()
+                ^^^^^^
+  File "C:\Users\Salva\OneDrive\Escritorio\agent_calendar\Calender-agent\test_postgresql_integration.py", line 344, in main
+    print_separator("\U0001f9ea TEST SUITE: PostgreSQL + pgvector Integration")
+  File "C:\Users\Salva\OneDrive\Escritorio\agent_calendar\Calender-agent\test_postgresql_integration.py", line 37, in print_separator
+    print(f"  {title}")
+  File "C:\Users\Salva\AppData\Local\Programs\Python\Python312\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f9ea' in position 2: character maps to <undefined>
+
+
+----------------------------------------------------------------------------------------------------
+Test: 🔍 Nodo 2: Filtrado (Detección Cambio Tema)
+Archivo: test_filtrado.py
+Status: FAILED
+Duración: 21.58s
+Exit Code: 1
+
+Output:
+DEEPSEEK_API_KEY: sk-c6bd351 ...
+
+
+Stderr:
+Traceback (most recent call last):
+  File "C:\Users\Salva\OneDrive\Escritorio\agent_calendar\Calender-agent\test_filtrado.py", line 153, in <module>
+    print("\n" + "\U0001f916 "+"="*76 + "\U0001f916")
+  File "C:\Users\Salva\AppData\Local\Programs\Python\Python312\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f916' in position 2: character maps to <undefined>
+
+
+----------------------------------------------------------------------------------------------------
+Test: 💾 Nodo 3: Recuperación Episódica
+Archivo: test_nodo3_episodico.py
+Status: FAILED
+Duración: 21.45s
+Exit Code: 1
+
+Output:
+DEEPSEEK_API_KEY: sk-c6bd351 ...
+
+
+Stderr:
+Traceback (most recent call last):
+  File "C:\Users\Salva\OneDrive\Escritorio\agent_calendar\Calender-agent\test_nodo3_episodico.py", line 184, in <module>
+    print("\n" + "\U0001f916 "+"="*76 + "\U0001f916")
+  File "C:\Users\Salva\AppData\Local\Programs\Python\Python312\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f916' in position 2: character maps to <undefined>
+
+
+----------------------------------------------------------------------------------------------------
+Test: 🛠️  Nodo 4: Selección de Herramientas
+Archivo: test_nodo4_seleccion.py
+Status: FAILED
+Duración: 22.79s
+Exit Code: 1
+
+Output:
+DEEPSEEK_API_KEY: sk-c6bd351 ...
+
+
+Stderr:
+Traceback (most recent call last):
+  File "C:\Users\Salva\OneDrive\Escritorio\agent_calendar\Calender-agent\test_nodo4_seleccion.py", line 143, in <module>
+    print("\n" + "\U0001f916 "+"="*76 + "\U0001f916")
+  File "C:\Users\Salva\AppData\Local\Programs\Python\Python312\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f916' in position 2: character maps to <undefined>
+
+
+----------------------------------------------------------------------------------------------------
+Test: ⚙️  Nodo 5: Ejecución de Herramientas
+Archivo: test_nodo5_ejecucion.py
+Status: FAILED
+Duración: 21.29s
+Exit Code: 1
+
+Output:
+DEEPSEEK_API_KEY: sk-c6bd351 ...
+
+
+Stderr:
+Traceback (most recent call last):
+  File "C:\Users\Salva\OneDrive\Escritorio\agent_calendar\Calender-agent\test_nodo5_ejecucion.py", line 209, in <module>
+    print("\n" + "\U0001f916 "+"="*76 + "\U0001f916")
+  File "C:\Users\Salva\AppData\Local\Programs\Python\Python312\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f916' in position 2: character maps to <undefined>
+
+
+----------------------------------------------------------------------------------------------------
+Test: 🛡️  Nodo 6: Protección (Validaciones)
+Archivo: test_nodo6_proteccion.py
+Status: FAILED
+Duración: 21.75s
+Exit Code: 1
+
+Output:
+DEEPSEEK_API_KEY: sk-c6bd351 ...
+
+
+Stderr:
+Traceback (most recent call last):
+  File "C:\Users\Salva\OneDrive\Escritorio\agent_calendar\Calender-agent\test_nodo6_proteccion.py", line 6, in <module>
+    print("\n\U0001f9ea Test: Protección contra Timeouts del Nodo 6\n")
+  File "C:\Users\Salva\AppData\Local\Programs\Python\Python312\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f9ea' in position 2: character maps to <undefined>
+
+
+----------------------------------------------------------------------------------------------------
+Test: 📝 Nodo 6: Generación de Resúmenes
+Archivo: test_nodo6_resumen.py
+Status: FAILED
+Duración: 21.55s
+Exit Code: 1
+
+Output:
+DEEPSEEK_API_KEY: sk-c6bd351 ...
+
+
+Stderr:
+Traceback (most recent call last):
+  File "C:\Users\Salva\OneDrive\Escritorio\agent_calendar\Calender-agent\test_nodo6_resumen.py", line 268, in <module>
+    print("\n" + "\U0001f916 "+"="*76 + "\U0001f916")
+  File "C:\Users\Salva\AppData\Local\Programs\Python\Python312\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f916' in position 2: character maps to <undefined>
+
+
+----------------------------------------------------------------------------------------------------
+Test: ⏰ Expiración de Sesión (24h)
+Archivo: test_expiracion_sesion.py
+Status: FAILED
+Duración: 21.92s
+Exit Code: 1
+
+Output:
+DEEPSEEK_API_KEY: sk-c6bd351 ...
+
+
+Stderr:
+Traceback (most recent call last):
+  File "C:\Users\Salva\OneDrive\Escritorio\agent_calendar\Calender-agent\test_expiracion_sesion.py", line 148, in <module>
+    print("\n" + "\U0001f916 "+"="*76 + "\U0001f916")
+  File "C:\Users\Salva\AppData\Local\Programs\Python\Python312\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f916' in position 2: character maps to <undefined>
+
+
+----------------------------------------------------------------------------------------------------
+Test: ⏱️  Manejo de Timeouts
+Archivo: test_timeout_fix.py
+Status: FAILED
+Duración: 21.09s
+Exit Code: 1
+
+Output:
+DEEPSEEK_API_KEY: sk-c6bd351 ...
+
+================================================================================
+
+
+Stderr:
+Traceback (most recent call last):
+  File "C:\Users\Salva\OneDrive\Escritorio\agent_calendar\Calender-agent\test_timeout_fix.py", line 15, in <module>
+    print("\U0001f50d ANÁLISIS DEL PROBLEMA DE TIMEOUT")
+  File "C:\Users\Salva\AppData\Local\Programs\Python\Python312\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f50d' in position 0: character maps to <undefined>
+
+
+----------------------------------------------------------------------------------------------------
+Test: ⏱️  Timeouts Simplificados
+Archivo: test_timeout_simple.py
+Status: FAILED
+Duración: 21.39s
+Exit Code: 1
+
+Output:
+DEEPSEEK_API_KEY: sk-c6bd351 ...
+
+================================================================================
+
+
+Stderr:
+Traceback (most recent call last):
+  File "C:\Users\Salva\OneDrive\Escritorio\agent_calendar\Calender-agent\test_timeout_simple.py", line 8, in <module>
+    print("\U0001f527 FIX APLICADO: Timeout en todos los LLMs")
+  File "C:\Users\Salva\AppData\Local\Programs\Python\Python312\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f527' in position 0: character maps to <undefined>
+
+
+----------------------------------------------------------------------------------------------------
+Test: 🔄 Resiliencia y Recuperación
+Archivo: test_resilience.py
+Status: FAILED
+Duración: 0.06s
+Exit Code: 1
+
+Output:
+
+================================================================================
+
+
+Stderr:
+Traceback (most recent call last):
+  File "C:\Users\Salva\OneDrive\Escritorio\agent_calendar\Calender-agent\test_resilience.py", line 11, in <module>
+    print("\U0001f6e1\ufe0f CONFIGURACIÓN DE RESILIENCIA IMPLEMENTADA")
+  File "C:\Users\Salva\AppData\Local\Programs\Python\Python312\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode characters in position 0-1: character maps to <undefined>
+
+
+----------------------------------------------------------------------------------------------------
+Test: ⚡ Tests Rápidos
+Archivo: test_quick.py
+Status: FAILED
+Duración: 21.82s
+Exit Code: 1
+
+Output:
+DEEPSEEK_API_KEY: sk-c6bd351 ...
+
+
+Stderr:
+Traceback (most recent call last):
+  File "C:\Users\Salva\OneDrive\Escritorio\agent_calendar\Calender-agent\test_quick.py", line 5, in <module>
+    print("\n\U0001f9ea Prueba de Sesión Expirada (30h inactividad)\n")
+  File "C:\Users\Salva\AppData\Local\Programs\Python\Python312\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f9ea' in position 2: character maps to <undefined>
+
+
+----------------------------------------------------------------------------------------------------
+Test: 🎯 END-TO-END: Flujo Completo (3 Escenarios)
+Archivo: test_end_to_end.py
+Status: FAILED
+Duración: 22.05s
+Exit Code: 1
+
+Output:
+DEEPSEEK_API_KEY: sk-c6bd351 ...
+
+================================================================================
+  TEST END-TO-END: Agente WhatsApp con Memoria Infinita
+================================================================================
+
+
+
+Stderr:
+Traceback (most recent call last):
+  File "C:\Users\Salva\OneDrive\Escritorio\agent_calendar\Calender-agent\test_end_to_end.py", line 344, in <module>
+    exit_code = main()
+                ^^^^^^
+  File "C:\Users\Salva\OneDrive\Escritorio\agent_calendar\Calender-agent\test_end_to_end.py", line 277, in main
+    print("\u23f1\ufe0f  Inicio:", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+  File "C:\Users\Salva\AppData\Local\Programs\Python\Python312\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode characters in position 0-1: character maps to <undefined>
+
+

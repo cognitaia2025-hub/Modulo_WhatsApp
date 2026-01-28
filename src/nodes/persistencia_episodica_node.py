@@ -137,7 +137,7 @@ def nodo_persistencia_episodica(state: Dict[str, Any]) -> Dict[str, Any]:
         return {
             **state,
             'resumen_actual': None,
-            'cambio_de_tema': False,
+            'requiere_herramientas': False,
             'sesion_expirada': False
         }
     
@@ -221,7 +221,7 @@ if __name__ == "__main__":
     
     resultado1 = nodo_persistencia_episodica(state_test1)
     print(f"✅ Resumen actual: {resultado1['resumen_actual']}")
-    print(f"✅ Cambio de tema: {resultado1['cambio_de_tema']}\n")
+    print(f"✅ Requiere herramientas: {resultado1['requiere_herramientas']}\n")
     
     # Test 2: Cierre por expiración
     print("Test 2: Persistencia con sesión expirada")

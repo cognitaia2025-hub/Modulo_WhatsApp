@@ -1,0 +1,940 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>State - La Mochila del Asistente</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Comic Sans MS', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+        }
+        
+        .back-button {
+            display: inline-block;
+            background: rgba(255,255,255,0.2);
+            color: white;
+            padding: 12px 25px;
+            border-radius: 25px;
+            text-decoration: none;
+            margin-bottom: 20px;
+            transition: all 0.3s ease;
+            font-size: 1.1rem;
+            font-weight: bold;
+        }
+        
+        .back-button:hover {
+            background: rgba(255,255,255,0.4);
+            transform: translateX(-5px) scale(1.05);
+        }
+        
+        h1 {
+            font-size: 3.5rem;
+            margin-bottom: 15px;
+            text-shadow: 3px 3px 6px rgba(0,0,0,0.3);
+        }
+        
+        .subtitle {
+            font-size: 1.4rem;
+            opacity: 0.95;
+            font-weight: bold;
+        }
+        
+        .analogy-intro {
+            background: rgba(255,255,255,0.2);
+            padding: 20px;
+            border-radius: 15px;
+            margin: 20px auto;
+            max-width: 800px;
+            font-size: 1.2rem;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        .components-list {
+            display: flex;
+            flex-direction: column;
+            gap: 30px;
+        }
+        
+        .component-card {
+            background: white;
+            border-radius: 20px;
+            padding: 0;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+            overflow: hidden;
+            border: 3px solid #fff;
+        }
+        
+        .component-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+        
+        .component-icon {
+            font-size: 3.5rem;
+        }
+        
+        .component-title {
+            flex: 1;
+        }
+        
+        .component-name {
+            font-size: 2.2rem;
+            font-weight: bold;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        
+        .file-type-badge {
+            font-size: 1rem;
+            background: rgba(255,255,255,0.3);
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-weight: normal;
+        }
+        
+        .info-note {
+            background: rgba(255,255,255,0.2);
+            padding: 15px 20px;
+            border-radius: 12px;
+            margin-top: 15px;
+            font-size: 1rem;
+            line-height: 1.6;
+        }
+        
+        .component-description {
+            font-size: 1.2rem;
+            opacity: 0.95;
+        }
+        
+        .sections-container {
+            padding: 35px;
+        }
+        
+        .component-wrapper {
+            margin-bottom: 30px;
+            border: 3px solid #667eea;
+            border-radius: 15px;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+        
+        .component-wrapper:hover {
+            border-color: #764ba2;
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.3);
+        }
+        
+        .component-toggle-header {
+            background: linear-gradient(135deg, #e8ebff 0%, #dde1ff 100%);
+            padding: 25px;
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            transition: all 0.3s ease;
+            border-bottom: 2px solid #667eea;
+        }
+        
+        .component-toggle-header:hover {
+            background: linear-gradient(135deg, #dde1ff 0%, #d0d5ff 100%);
+        }
+        
+        .component-toggle-header:active {
+            transform: scale(0.98);
+        }
+        
+        .component-expand-icon {
+            font-size: 2.5rem;
+            transition: transform 0.5s ease;
+            color: #667eea;
+            min-width: 40px;
+        }
+        
+        .component-expand-icon.expanded {
+            transform: rotate(90deg);
+        }
+        
+        .component-toggle-title {
+            flex: 1;
+        }
+        
+        .component-toggle-name {
+            font-size: 1.8rem;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 5px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .component-type-badge {
+            font-size: 0.85rem;
+            background: #667eea;
+            color: white;
+            padding: 5px 12px;
+            border-radius: 12px;
+            font-weight: normal;
+        }
+        
+        .component-toggle-desc {
+            font-size: 1.05rem;
+            color: #555;
+        }
+        
+        .component-sections {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.7s ease;
+            padding: 0;
+            background: white;
+        }
+        
+        .component-sections.expanded {
+            max-height: 8000px;
+            padding: 25px;
+        }
+        
+        .section {
+            margin-bottom: 25px;
+            border: 3px solid #e0e0e0;
+            border-radius: 15px;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+        
+        .section:hover {
+            border-color: #667eea;
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.2);
+        }
+        
+        .section-header {
+            background: linear-gradient(135deg, #f0f2ff 0%, #e8ebff 100%);
+            padding: 20px 25px;
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            transition: all 0.3s ease;
+        }
+        
+        .section-header:hover {
+            background: linear-gradient(135deg, #e8ebff 0%, #dde1ff 100%);
+        }
+        
+        .section-header:active {
+            transform: scale(0.98);
+        }
+        
+        .expand-icon {
+            font-size: 2rem;
+            transition: transform 0.5s ease;
+            color: #667eea;
+            min-width: 30px;
+        }
+        
+        .expand-icon.expanded {
+            transform: rotate(90deg);
+        }
+        
+        .section-title-container {
+            flex: 1;
+        }
+        
+        .section-title {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 5px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .technical-name {
+            font-size: 0.9rem;
+            font-weight: normal;
+            color: #7f8c8d;
+            background: #ecf0f1;
+            padding: 3px 10px;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .section-lines {
+            font-size: 0.9rem;
+            color: #7f8c8d;
+            background: rgba(102, 126, 234, 0.1);
+            padding: 5px 12px;
+            border-radius: 8px;
+            display: inline-block;
+            margin-top: 5px;
+        }
+        
+        .section-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.6s ease, padding 0.6s ease;
+            padding: 0 25px;
+        }
+        
+        .section-content.expanded {
+            max-height: 3000px;
+            padding: 25px;
+        }
+        
+        .explanation-box {
+            background: #fff9e6;
+            border-left: 5px solid #ffd700;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .explanation-title {
+            font-size: 1.3rem;
+            font-weight: bold;
+            color: #d4a300;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .explanation-text {
+            font-size: 1.1rem;
+            color: #555;
+            line-height: 1.8;
+        }
+        
+        .analogy-box {
+            background: linear-gradient(135deg, #e6f7ff 0%, #d6eeff 100%);
+            border-left: 5px solid #1890ff;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .analogy-title {
+            font-size: 1.3rem;
+            font-weight: bold;
+            color: #0066cc;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .analogy-text {
+            font-size: 1.15rem;
+            color: #333;
+            line-height: 1.8;
+            font-weight: 500;
+        }
+        
+        .details-box {
+            background: #f8f9fa;
+            padding: 15px 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .detail-item {
+            font-size: 1.05rem;
+            color: #555;
+            margin: 10px 0;
+            padding-left: 25px;
+            position: relative;
+            line-height: 1.6;
+        }
+        
+        .detail-item:before {
+            content: "✓";
+            position: absolute;
+            left: 5px;
+            color: #4caf50;
+            font-weight: bold;
+            font-size: 1.2rem;
+        }
+        
+        .code-block {
+            background: #2d3436;
+            color: #dfe6e9;
+            padding: 20px;
+            border-radius: 10px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.95rem;
+            line-height: 1.8;
+            overflow-x: auto;
+            border: 3px solid #1e272e;
+        }
+        
+        .code-line-number {
+            color: #636e72;
+            margin-right: 15px;
+            user-select: none;
+        }
+        
+        .keyword {
+            color: #fd79a8;
+            font-weight: bold;
+        }
+        
+        .string {
+            color: #fdcb6e;
+        }
+        
+        .comment {
+            color: #74b9ff;
+            font-style: italic;
+        }
+        
+        .class-name {
+            color: #81ecec;
+            font-weight: bold;
+        }
+        
+        .function {
+            color: #a29bfe;
+        }
+        
+        .badge {
+            display: inline-block;
+            background: #667eea;
+            color: white;
+            padding: 5px 15px;
+            border-radius: 15px;
+            font-size: 0.9rem;
+            margin-left: 10px;
+            font-weight: bold;
+        }
+        
+        .click-hint {
+            text-align: center;
+            color: #7f8c8d;
+            font-size: 0.95rem;
+            margin-top: 5px;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="src.html" class="back-button">← Volver a SRC</a>
+            <h1>📁 Folder: State - 🎒 La Mochila del Asistente</h1>
+            <p class="subtitle">¡Descubre qué lleva nuestro asistente en su mochila!</p>
+            <div class="analogy-intro">
+                <strong>🌟 Nuestra Analogía:</strong><br>
+                Imagina que el agente es un <strong>Asistente Personal</strong> que te ayuda con WhatsApp. 
+                Este asistente lleva una <strong>MOCHILA MÁGICA</strong> donde guarda todo lo que necesita 
+                para hacer su trabajo: cuadernos, fotos, herramientas, y más. ¡Vamos a ver qué hay dentro!
+            </div>
+        </div>
+        
+        <div class="components-list">
+            <!-- Componente 1: agent_state.py -->
+            <div class="component-card">
+                <div class="component-header">
+                    <div class="component-icon">🎒</div>
+                    <div class="component-title">
+                        <div class="component-name">
+                            <span>📄 Archivo: agent_state.py</span>
+                        </div>
+                        <div class="component-description">La mochila donde el asistente guarda todo lo importante</div>
+                        <div class="info-note">
+                            <strong>📚 Diferencia importante:</strong><br>
+                            • <strong>Archivo</strong> = El documento físico (.py) que contiene código<br>
+                            • <strong>Componente</strong> = Las piezas de código dentro del archivo (como la clase WhatsAppAgentState)<br>
+                            • <strong>Recuadros abajo</strong> = Las secciones/partes de cada componente
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="sections-container">
+                    <p class="click-hint">👇 Haz clic en cada recuadro para abrirlo como una cortina 👇</p>
+                    
+                    <div class="info-note" style="background: #fff9e6; color: #333; border-left: 5px solid #ffd700; margin-bottom: 25px;">
+                        <strong>🔍 Este archivo contiene:</strong><br>
+                        • Importaciones (sueltas, fuera de componentes)<br>
+                        • 1 Componente principal: <code>WhatsAppAgentState</code> (la clase con sus campos)
+                    </div>
+                    
+                    <!-- Sección suelta: Importaciones (no es parte de un componente) -->
+                    <div class="section">
+                        <div class="section-header" onclick="toggleSection('imports-1')">
+                            <span class="expand-icon" id="icon-imports-1">🚪</span>
+                            <div class="section-title-container">
+                                <div class="section-title">
+                                    <span>📦 Las Herramientas que Importamos</span>
+                                    <span class="technical-name">imports</span>
+                                </div>
+                                <span class="section-lines">Líneas 1-9</span>
+                            </div>
+                        </div>
+                        <div class="section-content" id="content-imports-1">
+                            <div class="explanation-box">
+                                <div class="explanation-title">🤓 ¿Qué hace esta parte?</div>
+                                <div class="explanation-text">
+                                    Aquí estamos "importando" herramientas especiales que nos ayudarán a crear nuestra mochila.
+                                    Es como cuando vas a la tienda a comprar los materiales antes de hacer un proyecto en la escuela:
+                                    necesitas tijeras, pegamento, colores, etc. Aquí importamos <strong>TypedDict</strong> para 
+                                    organizar datos, <strong>LangGraph</strong> para manejar mensajes automáticamente, y otros más.
+                                </div>
+                            </div>
+                            
+                            <div class="analogy-box">
+                                <div class="analogy-title">💡 Como en la vida real:</div>
+                                <div class="analogy-text">
+                                    <strong>Es como ir al supermercado antes de cocinar 🛒</strong><br><br>
+                                    Antes de que nuestro asistente pueda trabajar, necesita "comprar" sus herramientas.
+                                    Va a la tienda de código (importa) y trae:<br>
+                                    • Un <strong>organizador especial</strong> (TypedDict) para mantener todo en orden<br>
+                                    • Un <strong>cuaderno mágico</strong> (add_messages) que nunca se queda sin hojas<br>
+                                    • <strong>Etiquetas</strong> (Optional, List) para clasificar sus cosas
+                                </div>
+                            </div>
+                            
+                            <div class="code-block"><span class="code-line-number">1</span><span class="comment">"""</span>
+<span class="code-line-number">2</span><span class="comment">Estado del Agente de WhatsApp</span>
+<span class="code-line-number">3</span><span class="comment"></span>
+<span class="code-line-number">4</span><span class="comment">Define la estructura de datos compartida que fluye a través del grafo.</span>
+<span class="code-line-number">5</span><span class="comment">"""</span>
+<span class="code-line-number">6</span>
+<span class="code-line-number">7</span><span class="keyword">from</span> typing <span class="keyword">import</span> TypedDict, Optional, Annotated, Any, Dict, List
+<span class="code-line-number">8</span><span class="keyword">from</span> langgraph.graph.message <span class="keyword">import</span> add_messages
+<span class="code-line-number">9</span><span class="keyword">from</span> langchain_core.messages <span class="keyword">import</span> AnyMessage</div>
+                        </div>
+                    </div>
+                    
+                    <!-- COMPONENTE DESPLEGABLE: WhatsAppAgentState -->
+                    <div class="component-wrapper">
+                        <div class="component-toggle-header" onclick="toggleComponent('whatsapp-state')">
+                            <span class="component-expand-icon" id="comp-icon-whatsapp-state">🚪</span>
+                            <div class="component-toggle-title">
+                                <div class="component-toggle-name">
+                                    <span>🎯 Componente: WhatsAppAgentState</span>
+                                    <span class="component-type-badge">Clase / TypedDict</span>
+                                </div>
+                                <div class="component-toggle-desc">La estructura de la mochila con todos sus compartimentos</div>
+                            </div>
+                        </div>
+                        
+                        <div class="component-sections" id="comp-content-whatsapp-state">
+                            <p style="text-align: center; color: #7f8c8d; margin-bottom: 20px; font-style: italic;">
+                                👇 Campos/Secciones dentro de este componente 👇
+                            </p>
+                            <!-- Sección 1: Definición de la Clase -->
+                            <div class="section">
+                        <div class="section-header" onclick="toggleSection('class-def-1')">
+                            <span class="expand-icon" id="icon-class-def-1">🚪</span>
+                            <div class="section-title-container">
+                                <div class="section-title">
+                                    <span>🎒 Creamos la Mochila (Definición de la Clase)</span>
+                                    <span class="technical-name">class WhatsAppAgentState</span>
+                                </div>
+                                <span class="section-lines">Líneas 12-25</span>
+                                <span class="badge">Definición</span>
+                            </div>
+                        </div>
+                        <div class="section-content" id="content-class-def-1">
+                            <div class="explanation-box">
+                                <div class="explanation-title">🤓 ¿Qué hace esta parte?</div>
+                                <div class="explanation-text">
+                                    Aquí definimos <strong>WhatsAppAgentState</strong>, que es como el diseño de la mochila.
+                                    Estamos diciendo: "La mochila tendrá estos compartimentos, estos bolsillos, y estos espacios".
+                                    Cada compartimento guardará algo específico que el asistente necesita para trabajar.
+                                </div>
+                            </div>
+                            
+                            <div class="analogy-box">
+                                <div class="analogy-title">💡 Como en la vida real:</div>
+                                <div class="analogy-text">
+                                    <strong>Es como diseñar una mochila escolar perfecta 🎒</strong><br><br>
+                                    Imagina que estás diseñando la mochila ideal para la escuela. Decides que necesitas:<br>
+                                    • Un <strong>compartimento grande</strong> para libros (mensajes)<br>
+                                    • Un <strong>bolsillo frontal</strong> con tu nombre (user_id)<br>
+                                    • Una <strong>etiqueta</strong> con el número de salón (session_id)<br>
+                                    • Un <strong>álbum de fotos</strong> de momentos importantes (contexto_episodico)<br>
+                                    • Un <strong>estuche</strong> con herramientas (herramientas_seleccionadas)<br><br>
+                                    ¡Esta clase hace exactamente eso, pero para nuestro asistente digital!
+                                </div>
+                            </div>
+                            
+                            <div class="code-block"><span class="code-line-number">12</span><span class="keyword">class</span> <span class="class-name">WhatsAppAgentState</span>(TypedDict):
+<span class="code-line-number">13</span>    <span class="comment">"""</span>
+<span class="code-line-number">14</span>    <span class="comment">Estado compartido del agente que fluye a través de todos los nodos.</span>
+<span class="code-line-number">15</span>    <span class="comment"></span>
+<span class="code-line-number">16</span>    <span class="comment">Campos:</span>
+<span class="code-line-number">17</span>    <span class="comment">    messages: Historial de conversación</span>
+<span class="code-line-number">18</span>    <span class="comment">    user_id: Identificador único del usuario</span>
+<span class="code-line-number">19</span>    <span class="comment">    session_id: ID de la sesión actual</span>
+<span class="code-line-number">20</span>    <span class="comment">    contexto_episodico: Resúmenes previos recuperados de pgvector</span>
+<span class="code-line-number">21</span>    <span class="comment">    herramientas_seleccionadas: IDs de herramientas a ejecutar</span>
+<span class="code-line-number">22</span>    <span class="comment">    cambio_de_tema: Indicador de cambio de tema detectado</span>
+<span class="code-line-number">23</span>    <span class="comment">    resumen_actual: Resumen generado de la conversación</span>
+<span class="code-line-number">24</span>    <span class="comment">    timestamp: Marca de tiempo de la interacción</span>
+<span class="code-line-number">25</span>    <span class="comment">"""</span></div>
+                        </div>
+                    </div>
+                    
+                    <!-- Sección 2: Campos de Conversación -->
+                    <div class="section">
+                        <div class="section-header" onclick="toggleSection('conversation-1')">
+                            <span class="expand-icon" id="icon-conversation-1">🚪</span>
+                            <div class="section-title-container">
+                                <div class="section-title">
+                                    <span>💬 El Cuaderno de Conversaciones</span>
+                                    <span class="technical-name">messages, user_id, session_id</span>
+                                </div>
+                                <span class="section-lines">Líneas 26-29</span>
+                            </div>
+                        </div>
+                        <div class="section-content" id="content-conversation-1">
+                            <div class="explanation-box">
+                                <div class="explanation-title">🤓 ¿Qué hace esta parte?</div>
+                                <div class="explanation-text">
+                                    Aquí guardamos todo lo relacionado con la conversación actual:
+                                    <strong>messages</strong> es como un cuaderno donde escribimos cada mensaje (¡y nunca borramos nada!),
+                                    <strong>user_id</strong> es el nombre de la persona con quien hablamos,
+                                    y <strong>session_id</strong> es como el número de página donde estamos.
+                                </div>
+                            </div>
+                            
+                            <div class="analogy-box">
+                                <div class="analogy-title">💡 Como en la vida real:</div>
+                                <div class="analogy-text">
+                                    <strong>Es como un cuaderno de diario con pestañas 📔</strong><br><br>
+                                    Imagina que tienes un diario donde escribes conversaciones con tus amigos:<br>
+                                    • <strong>messages</strong>: Las páginas del cuaderno donde escribes TODO lo que hablan<br>
+                                    • <strong>user_id</strong>: El nombre de tu amigo escrito en grande (¿Estás hablando con María o con Juan?)<br>
+                                    • <strong>session_id</strong>: El número de conversación ("Esta es la 5ª vez que hablamos hoy")<br><br>
+                                    ¡El cuaderno mágico nunca se llena y siempre recuerda TODO!
+                                </div>
+                            </div>
+                            
+                            <div class="code-block"><span class="code-line-number">26</span>    <span class="comment"># Conversación</span>
+<span class="code-line-number">27</span>    messages: Annotated[list[AnyMessage], add_messages]
+<span class="code-line-number">28</span>    user_id: str
+<span class="code-line-number">29</span>    session_id: str</div>
+                        </div>
+                    </div>
+                    
+                    <!-- Sección 4: Memoria Episódica -->
+                    <div class="section">
+                        <div class="section-header" onclick="toggleSection('episodic-1')">
+                            <span class="expand-icon" id="icon-episodic-1">🚪</span>
+                            <div class="section-title-container">
+                                <div class="section-title">
+                                    <span>📸 El Álbum de Fotos (Memoria de Largo Plazo)</span>
+                                    <span class="technical-name">contexto_episodico</span>
+                                </div>
+                                <span class="section-lines">Líneas 31-32</span>
+                            </div>
+                        </div>
+                        <div class="section-content" id="content-episodic-1">
+                            <div class="explanation-box">
+                                <div class="explanation-title">🤓 ¿Qué hace esta parte?</div>
+                                <div class="explanation-text">
+                                    <strong>contexto_episodico</strong> guarda resúmenes de conversaciones pasadas.
+                                    Cuando hablas con el asistente sobre algo que ya habían hablado antes,
+                                    él puede ir a su "álbum de fotos" y recordar: "¡Ah sí! Ya habíamos hablado de esto hace 2 días".
+                                    Usa una tecnología llamada <strong>pgvector</strong> que es como un álbum inteligente.
+                                </div>
+                            </div>
+                            
+                            <div class="analogy-box">
+                                <div class="analogy-title">💡 Como en la vida real:</div>
+                                <div class="analogy-text">
+                                    <strong>Es como un álbum de fotos con buscador mágico 📸✨</strong><br><br>
+                                    Tu asistente tiene un álbum de fotos donde guarda "momentos importantes" de conversaciones anteriores.
+                                    Pero no es un álbum normal, ¡es MÁGICO!<br><br>
+                                    Cuando le preguntas sobre algo, el álbum <strong>busca automáticamente</strong> fotos relacionadas:<br>
+                                    • "¿Recuerdas cuando hablamos de mi cumpleaños?" → 📸 ¡Encuentra la foto de esa conversación!<br>
+                                    • "¿Qué te dije sobre mi tarea?" → 📸 ¡Busca y encuentra esa memoria!<br><br>
+                                    Así el asistente tiene "memoria de largo plazo" como tú.
+                                </div>
+                            </div>
+                            
+                            <div class="code-block"><span class="code-line-number">31</span>    <span class="comment"># Memoria Episódica (recuperada de pgvector)</span>
+<span class="code-line-number">32</span>    contexto_episodico: Optional[Dict[str, Any]]</div>
+                        </div>
+                    </div>
+                    
+                    <!-- Sección 5: Memoria Procedimental -->
+                    <div class="section">
+                        <div class="section-header" onclick="toggleSection('procedural-1')">
+                            <span class="expand-icon" id="icon-procedural-1">🚪</span>
+                            <div class="section-title-container">
+                                <div class="section-title">
+                                    <span>🧰 La Caja de Herramientas</span>
+                                    <span class="technical-name">herramientas_seleccionadas</span>
+                                </div>
+                                <span class="section-lines">Líneas 34-35</span>
+                            </div>
+                        </div>
+                        <div class="section-content" id="content-procedural-1">
+                            <div class="explanation-box">
+                                <div class="explanation-title">🤓 ¿Qué hace esta parte?</div>
+                                <div class="explanation-text">
+                                    <strong>herramientas_seleccionadas</strong> es una lista de herramientas que el asistente
+                                    decidió usar para ayudarte. Por ejemplo: si le pides "crear un evento", él selecciona
+                                    la herramienta "CrearEvento". Es como cuando un carpintero elige qué herramientas
+                                    necesita de su caja antes de empezar a trabajar.
+                                </div>
+                            </div>
+                            
+                            <div class="analogy-box">
+                                <div class="analogy-title">💡 Como en la vida real:</div>
+                                <div class="analogy-text">
+                                    <strong>Es como la caja de herramientas de un carpintero 🧰</strong><br><br>
+                                    Imagina que tu asistente es un carpintero súper inteligente. Cuando le dices qué necesitas,
+                                    él va a su caja de herramientas y escoge las correctas:<br><br>
+                                    • Le pides: "Crea un evento para mañana" → Toma la herramienta 🔨 "CrearEvento"<br>
+                                    • Le pides: "Muéstrame mi calendario" → Toma la herramienta 📅 "MostrarCalendario"<br>
+                                    • Le pides: "Elimina la reunión de las 3pm" → Toma la herramienta 🗑️ "EliminarEvento"<br><br>
+                                    Esta lista guarda <strong>qué herramientas eligió</strong> para hacer el trabajo que le pediste.
+                                </div>
+                            </div>
+                            
+                            <div class="code-block"><span class="code-line-number">34</span>    <span class="comment"># Memoria Procedimental (consultada en PostgreSQL)</span>
+<span class="code-line-number">35</span>    herramientas_seleccionadas: List[str]</div>
+                        </div>
+                    </div>
+                    
+                    <!-- Sección 6: Control de Flujo -->
+                    <div class="section">
+                        <div class="section-header" onclick="toggleSection('control-1')">
+                            <span class="expand-icon" id="icon-control-1">🚪</span>
+                            <div class="section-title-container">
+                                <div class="section-title">
+                                    <span>🚦 Los Semáforos de Control</span>
+                                    <span class="technical-name">cambio_de_tema, resumen_actual, sesion_expirada</span>
+                                </div>
+                                <span class="section-lines">Líneas 37-40</span>
+                            </div>
+                        </div>
+                        <div class="section-content" id="content-control-1">
+                            <div class="explanation-box">
+                                <div class="explanation-title">🤓 ¿Qué hace esta parte?</div>
+                                <div class="explanation-text">
+                                    Estos campos son como "luces de control" que le dicen al asistente qué hacer:<br>
+                                    • <strong>cambio_de_tema</strong>: "¡Ey, cambiamos de tema!" (como cambiar de materia en clase)<br>
+                                    • <strong>resumen_actual</strong>: Un resumen cortito de lo que están hablando ahora<br>
+                                    • <strong>sesion_expirada</strong>: "¿Ya pasaron más de 24 horas? Entonces empecemos de nuevo"
+                                </div>
+                            </div>
+                            
+                            <div class="analogy-box">
+                                <div class="analogy-title">💡 Como en la vida real:</div>
+                                <div class="analogy-text">
+                                    <strong>Es como los semáforos y señales de tránsito 🚦</strong><br><br>
+                                    Imagina que la conversación es un viaje en auto. Estas señales le dicen al conductor (asistente) qué hacer:<br><br>
+                                    • <strong>cambio_de_tema</strong>: Una señal de "CAMBIO DE DIRECCIÓN" 🔄<br>
+                                      "Antes hablábamos de tareas, ¡ahora hablamos de tu cumpleaños!"<br><br>
+                                    • <strong>resumen_actual</strong>: Un letrero que dice "ESTÁS AQUÍ" 📍<br>
+                                      "Resumen: Estamos planeando una fiesta para el sábado"<br><br>
+                                    • <strong>sesion_expirada</strong>: Un temporizador ⏰<br>
+                                      "¿Ya pasó un día completo sin hablar? ¡Empecemos fresco!"
+                                </div>
+                            </div>
+                            
+                            <div class="code-block"><span class="code-line-number">37</span>    <span class="comment"># Control de flujo</span>
+<span class="code-line-number">38</span>    cambio_de_tema: bool
+<span class="code-line-number">39</span>    resumen_actual: Optional[str]
+<span class="code-line-number">40</span>    sesion_expirada: bool  <span class="comment"># True si han pasado >24h desde último mensaje</span></div>
+                        </div>
+                    </div>
+                    
+                    <!-- Sección 7: Metadata -->
+                    <div class="section">
+                        <div class="section-header" onclick="toggleSection('metadata-1')">
+                            <span class="expand-icon" id="icon-metadata-1">🚪</span>
+                            <div class="section-title-container">
+                                <div class="section-title">
+                                    <span>⏰ El Reloj del Asistente</span>
+                                    <span class="technical-name">timestamp</span>
+                                </div>
+                                <span class="section-lines">Líneas 42-43</span>
+                            </div>
+                        </div>
+                        <div class="section-content" id="content-metadata-1">
+                            <div class="explanation-box">
+                                <div class="explanation-title">🤓 ¿Qué hace esta parte?</div>
+                                <div class="explanation-text">
+                                    <strong>timestamp</strong> guarda la hora exacta en que estás hablando con el asistente.
+                                    Es como cuando pones la fecha en tu cuaderno. Esto ayuda al asistente a saber
+                                    cuánto tiempo ha pasado desde la última vez que hablaron.
+                                </div>
+                            </div>
+                            
+                            <div class="analogy-box">
+                                <div class="analogy-title">💡 Como en la vida real:</div>
+                                <div class="analogy-text">
+                                    <strong>Es como el reloj y calendario en tu cuaderno ⏰📅</strong><br><br>
+                                    Cuando escribes en tu diario, siempre pones la fecha y hora arriba, ¿verdad?<br>
+                                    "Lunes 25 de Enero, 2026 - 9:15 AM"<br><br>
+                                    Tu asistente hace lo mismo. Cada vez que hablan, anota la hora exacta.
+                                    Así puede saber:<br>
+                                    • "Hablamos hace 5 minutos" → Sigue fresca la conversación ✅<br>
+                                    • "Hablamos hace 2 días" → Mejor pregunto de qué hablábamos 🤔<br>
+                                    • "Hablamos hace 1 mes" → ¡Probablemente empecemos de cero! 🆕
+                                </div>
+                            </div>
+                            
+                            <div class="code-block"><span class="code-line-number">42</span>    <span class="comment"># Metadata</span>
+<span class="code-line-number">43</span>    timestamp: str</div>
+                        </div>
+                    </div>
+                    
+                        </div>
+                    </div>
+                    <!-- FIN DEL COMPONENTE WhatsAppAgentState -->
+                    
+                </div>
+            </div>
+            
+            <!-- Componente 2: __init__.py -->
+            <div class="component-card">
+                <div class="component-header">
+                    <div class="component-icon">📦</div>
+                    <div class="component-title">
+                        <div class="component-name">
+                            <span>📄 Archivo: __init__.py</span>
+                        </div>
+                        <div class="component-description">La etiqueta de la mochila (exportaciones del paquete)</div>
+                        <div class="info-note">
+                            <strong>ℹ️ Nota:</strong> Este archivo no define componentes nuevos, solo exporta (comparte) 
+                            los componentes que están en otros archivos.
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="sections-container">
+                    <!-- Sección 1: Exportaciones -->
+                    <div class="section">
+                        <div class="section-header" onclick="toggleSection('exports-2')">
+                            <span class="expand-icon" id="icon-exports-2">🚪</span>
+                            <div class="section-title-container">
+                                <div class="section-title">
+                                    <span>🏷️ La Etiqueta de la Mochila</span>
+                                    <span class="technical-name">__all__</span>
+                                </div>
+                                <span class="section-lines">Líneas 1-7</span>
+                            </div>
+                        </div>
+                        <div class="section-content" id="content-exports-2">
+                            <div class="explanation-box">
+                                <div class="explanation-title">🤓 ¿Qué hace esta parte?</div>
+                                <div class="explanation-text">
+                                    Este archivo es como la <strong>etiqueta de la mochila</strong>. Dice:
+                                    "Ey, si alguien quiere usar esta mochila, aquí está lo que puede tomar".
+                                    Exporta <strong>WhatsAppAgentState</strong> para que otros archivos del proyecto
+                                    puedan usarla fácilmente sin tener que buscar en qué archivo exacto está.
+                                </div>
+                            </div>
+                            
+                            <div class="analogy-box">
+                                <div class="analogy-title">💡 Como en la vida real:</div>
+                                <div class="analogy-text">
+                                    <strong>Es como la etiqueta en la puerta de una tienda 🏪</strong><br><br>
+                                    Imagina una tienda con muchos productos dentro. En la puerta hay una etiqueta que dice:<br>
+                                    <strong>"PRODUCTOS DISPONIBLES PARA LLEVAR"</strong><br><br>
+                                    Este archivo hace lo mismo:<br>
+                                    • Dice: "Aquí pueden encontrar → <strong>WhatsAppAgentState</strong>"<br>
+                                    • Otros archivos pueden venir y decir: "Dame la mochila de State" → ¡Y la consiguen fácil!<br><br>
+                                    <strong>Sin esta etiqueta:</strong> Tendrías que buscar en toda la tienda 😰<br>
+                                    <strong>Con esta etiqueta:</strong> Sabes exactamente qué puedes tomar 😊
+                                </div>
+                            </div>
+                            
+                            <div class="details-box">
+                                <div class="detail-item"><strong>Uso simple:</strong> <code>from src.state import WhatsAppAgentState</code></div>
+                                <div class="detail-item">Sin esto tendrías que escribir: <code>from src.state.agent_state import WhatsAppAgentState</code> 😵</div>
+                            </div>
+                            
+                            <div class="code-block"><span class="code-line-number">1</span><span class="comment">"""</span>
+<span class="code-line-number">2</span><span class="comment">Módulo de Estado del Agente</span>
+<span class="code-line-number">3</span><span class="comment">"""</span>
+<span class="code-line-number">4</span>
+<span class="code-line-number">5</span><span class="keyword">from</span> .agent_state <span class="keyword">import</span> WhatsAppAgentState
+<span class="code-line-number">6</span>
+<span class="code-line-number">7</span>__all__ = [<span class="string">"WhatsAppAgentState"</span>]</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        function toggleSection(sectionId) {
+            const content = document.getElementById('content-' + sectionId);
+            const icon = document.getElementById('icon-' + sectionId);
+            
+            if (content.classList.contains('expanded')) {
+                content.classList.remove('expanded');
+                icon.classList.remove('expanded');
+                icon.textContent = '🚪';
+            } else {
+                content.classList.add('expanded');
+                icon.classList.add('expanded');
+                icon.textContent = '🚪';
+            }
+        }
+        
+        function toggleComponent(componentId) {
+            const content = document.getElementById('comp-content-' + componentId);
+            const icon = document.getElementById('comp-icon-' + componentId);
+            
+            console.log('Toggling component:', componentId);
+            console.log('Content element:', content);
+            console.log('Icon element:', icon);
+            
+            if (content && icon) {
+                if (content.classList.contains('expanded')) {
+                    content.classList.remove('expanded');
+                    icon.classList.remove('expanded');
+                    console.log('Closed');
+                } else {
+                    content.classList.add('expanded');
+                    icon.classList.add('expanded');
+                    console.log('Opened');
+                }
+            } else {
+                console.error('Element not found!');
+            }
+        }
+    </script>
+</body>
+</html>

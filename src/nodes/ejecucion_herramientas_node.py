@@ -33,8 +33,10 @@ from src.tool import (
     list_events_tool,
     postpone_event_tool,
     update_event_tool,
-    delete_event_tool
+    delete_event_tool,
+    search_calendar_events_tool
 )
+from src.database.db_auditoria import insertar_auditoria
 import json
 import pendulum
 
@@ -75,7 +77,8 @@ TOOL_MAPPING = {
     'list_calendar_events': list_events_tool,
     'update_calendar_event': update_event_tool,
     'delete_calendar_event': delete_event_tool,
-    'postpone_calendar_event': postpone_event_tool
+    'postpone_calendar_event': postpone_event_tool,
+    'search_calendar_events': search_calendar_events_tool
 }
 
 
@@ -215,7 +218,31 @@ Responde SOLO con JSON:
 }}
 
 JSON:"""
-    
+
+    elif tool_id == 'search_calendar_events':
+        prompt = f"""Extrae palabras clave de búsqueda y rango de fechas del mensaje del usuario.
+
+CONTEXTO DE TIEMPO:
+{tiempo_context}
+
+MENSAJE DEL USUARIO:
+"{mensaje_usuario}"
+
+Instrucciones:
+1. Identifica las palabras clave que el usuario quiere buscar (nombre de paciente, tipo de cita, etc.)
+2. Si menciona un rango de fechas, extráelo. Si no, usa los próximos 30 días.
+3. Si dice "hoy", "esta semana", "este mes", calcula las fechas correctas.
+
+Responde SOLO con JSON:
+{{
+  "query": "palabras clave a buscar",
+  "start_datetime": "YYYY-MM-DDTHH:MM:SS",
+  "end_datetime": "YYYY-MM-DDTHH:MM:SS",
+  "max_results": 10
+}}
+
+JSON:"""
+
     else:
         logger.warning(f"    ⚠️  No hay plantilla de extracción para {tool_id}")
         return {}
@@ -607,12 +634,21 @@ RESPUESTA:"""
         output_data = f"respuesta: {respuesta_texto}"
         log_node_io(logger, "OUTPUT", "NODO_5_EJECUCION", output_data)
         log_separator(logger, "NODO_5_EJECUCION_HERRAMIENTAS", "FIN")
-        
+
+        # ✅ AUDITORÍA: Registrar conversación
+        try:
+            user_id = state.get('user_id', 'unknown')
+            session_id = state.get('session_id', 'unknown')
+            insertar_auditoria(user_id, session_id, 'user', mensaje_usuario)
+            insertar_auditoria(user_id, session_id, 'assistant', respuesta_texto)
+        except Exception as audit_err:
+            logger.debug(f"    ⚠️  Auditoría no disponible: {audit_err}")
+
         # Agregar respuesta al estado
         return {
             'messages': [AIMessage(content=respuesta_texto)],
             'herramientas_seleccionadas': [],
-            'cambio_de_tema': False
+            'requiere_herramientas': False
         }
     
     # Paso 1: Inyectar contexto de tiempo
@@ -745,7 +781,34 @@ RESPUESTA:"""
             
             parametros['timezone'] = 'America/Tijuana'
             resultado = ejecutar_herramienta(tool_id, parametros)
-            
+
+        elif tool_id == 'search_calendar_events':
+            # Búsqueda de eventos por palabras clave
+            if not parametros.get('query'):
+                resultado = {
+                    'success': False,
+                    'error': 'Necesito una palabra clave para buscar. Por ejemplo: "Busca citas con García"',
+                    'data': None,
+                    'tool_id': tool_id
+                }
+                resultados.append(resultado)
+                logger.warning(f"    ⚠️  Sin query para search")
+                continue
+
+            # Asegurar rango de fechas por defecto (próximos 30 días)
+            if not parametros.get('start_datetime'):
+                from src.utils.time_utils import get_current_time
+                now = get_current_time()
+                parametros['start_datetime'] = now.start_of('day').to_datetime_string()
+                parametros['end_datetime'] = now.add(days=30).end_of('day').to_datetime_string()
+
+            resultado = ejecutar_herramienta(tool_id, parametros)
+
+            # Guardar resultados para contexto futuro
+            if resultado['success'] and isinstance(resultado.get('data'), list):
+                state['ultimo_listado'] = resultado['data']
+                logger.info(f"    💾 Guardado resultado de búsqueda con {len(resultado['data'])} eventos")
+
         else:
             # Otras herramientas
             resultado = {
@@ -795,12 +858,19 @@ RESPUESTA:"""
     output_data = f"respuesta: {respuesta_texto}\nherramientas_ejecutadas: {len(resultados)}"
     log_node_io(logger, "OUTPUT", "NODO_5_EJECUCION", output_data)
     log_separator(logger, "NODO_5_EJECUCION_HERRAMIENTAS", "FIN")
-    
+
+    # ✅ AUDITORÍA: Registrar conversación con herramientas
+    try:
+        insertar_auditoria(user_id, state.get('session_id', 'unknown'), 'user', mensaje_usuario)
+        insertar_auditoria(user_id, state.get('session_id', 'unknown'), 'assistant', respuesta_texto)
+    except Exception as audit_err:
+        logger.debug(f"    ⚠️  Auditoría no disponible: {audit_err}")
+
     # Paso 4: Actualizar estado
     return {
         'messages': [AIMessage(content=respuesta_texto)],
         'herramientas_seleccionadas': [],  # Limpiar
-        'cambio_de_tema': False,  # Reset
+        'requiere_herramientas': False,  # Reset
         'ultimo_listado': state.get('ultimo_listado')  # ✅ Preservar último listado
     }
 
@@ -816,7 +886,7 @@ def nodo_ejecucion_herramientas_wrapper(state: WhatsAppAgentState, store: BaseSt
     # Actualizar estado
     state['messages'] = state.get('messages', []) + resultado.get('messages', [])
     state['herramientas_seleccionadas'] = resultado.get('herramientas_seleccionadas', [])
-    state['cambio_de_tema'] = resultado.get('cambio_de_tema', False)
+    state['requiere_herramientas'] = resultado.get('requiere_herramientas', False)
     
     # ✅ NUEVO: Preservar ultimo_listado para contexto en futuras operaciones
     if resultado.get('ultimo_listado') is not None:

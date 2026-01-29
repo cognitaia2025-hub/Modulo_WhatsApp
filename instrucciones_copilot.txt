@@ -1,0 +1,243 @@
+
+  ## 📋 PROMPT ETAPA 5 - Sincronización Google Calendar
+
+  ```markdown
+  # ETAPA 5: Sincronización BD ↔ Google Calendar
+
+  ## 🎯 Objetivo
+  BD médica es source of truth. Google Calendar es solo visualización.
+  Si falla sincronización, cita sigue válida en BD.
+
+  ## ⚠️ REGLA CRÍTICA DE TESTS
+  ❌ NO modifiques los tests para que pasen
+  ✅ REPARA el código si el test falla
+  ⚖️ ÚNICA EXCEPCIÓN: Error lógico evidente en el test (documentar por qué)
+
+  Si test falla → Analizar código → Corregir código → Re-ejecutar test
+
+  ## 📁 Archivos a Crear
+
+  ### 1. sql/migrate_etapa_5_sincronizacion.sql
+
+  Tabla principal:
+  ```sql
+  CREATE TABLE sincronizacion_calendar (
+      id SERIAL PRIMARY KEY,
+      cita_id INTEGER REFERENCES citas_medicas(id),
+      google_event_id VARCHAR,
+      estado VARCHAR CHECK (estado IN ('sincronizada', 'pendiente', 'error', 'reintentando')),
+      ultimo_intento TIMESTAMP DEFAULT NOW(),
+      siguiente_reintento TIMESTAMP,
+      intentos INTEGER DEFAULT 0,
+      max_intentos INTEGER DEFAULT 5,
+      error_message TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+  );
+
+  CREATE INDEX idx_sync_pendientes
+  ON sincronizacion_calendar(estado, siguiente_reintento)
+  WHERE estado IN ('error', 'pendiente');
+
+  2. src/nodes/sincronizador_hibrido_node.py
+
+  Función principal: sincronizador_hibrido_node(state: WhatsAppAgentState) -> Dict
+
+  Lógica:
+  def sincronizador_hibrido_node(state):
+      cita_id = state.get('cita_id_creada')
+      if not cita_id:
+          return state  # No hay nada que sincronizar
+
+      try:
+          # 1. Obtener cita de BD
+          cita = db.query(CitasMedicas).get(cita_id)
+          doctor = db.query(Doctores).get(cita.doctor_id)
+          paciente = db.query(Pacientes).get(cita.paciente_id)
+
+          # 2. Crear evento Google Calendar
+          evento = {
+              'summary': f'Consulta - {paciente.nombre_completo}',
+              'description': f'''
+                  Paciente: {paciente.nombre_completo}
+                  Tel: {paciente.telefono}
+                  Tipo: {cita.tipo_consulta}
+
+                  ID Cita: {cita.id}
+                  Sistema: WhatsApp Agent
+              ''',
+              'start': {
+                  'dateTime': cita.fecha_hora_inicio.isoformat(),
+                  'timeZone': 'America/Tijuana'
+              },
+              'end': {
+                  'dateTime': cita.fecha_hora_fin.isoformat(),
+                  'timeZone': 'America/Tijuana'
+              },
+              'extendedProperties': {
+                  'private': {
+                      'cita_id': str(cita.id),
+                      'sistema': 'whatsapp_agent'
+                  }
+              },
+              'colorId': '11'  # Rojo para citas médicas
+          }
+
+          # 3. Insertar en Google Calendar
+          calendar_service = get_calendar_service()
+          result = calendar_service.events().insert(
+              calendarId=GOOGLE_CALENDAR_ID,
+              body=evento
+          ).execute()
+
+          # 4. Guardar event_id en BD
+          cita.google_event_id = result['id']
+          db.commit()
+
+          # 5. Registrar sincronización exitosa
+          db.add(SincronizacionCalendar(
+              cita_id=cita.id,
+              google_event_id=result['id'],
+              estado='sincronizada',
+              intentos=1
+          ))
+          db.commit()
+
+          return {**state, 'sincronizado': True}
+
+      except Exception as e:
+          # Registrar error PERO mantener cita válida
+          db.add(SincronizacionCalendar(
+              cita_id=cita_id,
+              estado='error',
+              error_message=str(e),
+              siguiente_reintento=datetime.now() + timedelta(minutes=15),
+              intentos=1
+          ))
+          db.commit()
+
+          return {**state, 'sincronizado': False}
+
+  CRÍTICO: Si falla Google Calendar, cita debe seguir válida en BD.
+
+  3. src/workers/retry_worker.py
+
+  Worker que reintenta sincronizaciones fallidas:
+
+  def retry_failed_syncs():
+      """Ejecutar cada 15 minutos"""
+      ahora = datetime.now()
+
+      # Buscar sincronizaciones pendientes
+      pendientes = db.query(SincronizacionCalendar).filter(
+          SincronizacionCalendar.estado.in_(['error', 'pendiente']),
+          SincronizacionCalendar.siguiente_reintento <= ahora,
+          SincronizacionCalendar.intentos < SincronizacionCalendar.max_intentos
+      ).all()
+
+      for sync in pendientes:
+          try:
+              # Reintentar sincronización
+              resultado = sincronizar_cita_a_google(sync.cita_id)
+
+              if resultado['exito']:
+                  sync.estado = 'sincronizada'
+                  sync.google_event_id = resultado['event_id']
+              else:
+                  sync.intentos += 1
+                  sync.estado = 'reintentando'
+                  sync.siguiente_reintento = ahora + timedelta(minutes=15)
+
+          except Exception as e:
+              sync.intentos += 1
+              sync.error_message = str(e)
+
+              if sync.intentos >= sync.max_intentos:
+                  sync.estado = 'error_permanente'
+              else:
+                  sync.siguiente_reintento = ahora + timedelta(minutes=15)
+
+          db.commit()
+
+  4. Actualizar src/medical/models.py
+
+  Agregar a tabla citas_medicas:
+  google_event_id = Column(String, nullable=True)
+  sincronizada_google = Column(Boolean, default=False)
+
+  🧪 Tests Requeridos
+
+  tests/Etapa_5/test_sincronizador_node.py (6 tests)
+
+  test_sincronizacion_exitosa()
+  test_bd_mantiene_cita_si_falla_google()
+  test_actualiza_google_event_id()
+  test_registra_error_sincronizacion()
+  test_color_rojo_para_citas_medicas()
+  test_extended_properties_correctas()
+
+  tests/Etapa_5/test_retry_logic.py (5 tests)
+
+  test_retry_worker_reintenta_fallidas()
+  test_respeta_max_intentos()
+  test_incrementa_contador_intentos()
+  test_calcula_siguiente_reintento_15min()
+  test_no_reintenta_si_ya_sincronizada()
+
+  tests/Etapa_5/test_bd_source_truth.py (4 tests)
+
+  test_cita_valida_sin_google()
+  test_consultar_citas_ignora_google()
+  test_cancelar_cita_actualiza_ambos()
+  test_bd_prevalece_sobre_google()
+
+  ✅ Criterios de Éxito
+
+  - 15/15 tests pasando (100%)
+  - BD es source of truth siempre
+  - Retry automático cada 15 min
+  - Max 5 intentos antes de error permanente
+  - Sin errores en logs
+
+  🔧 Dependencias
+
+  Usar:
+  - get_calendar_service() (src/auth/google_calendar_auth.py)
+  - GOOGLE_CALENDAR_ID (de .env)
+  - CitasMedicas model (src/medical/models.py)
+
+  📊 Reporte Final
+
+  Formato esperado:
+  ETAPA 5 - Sincronización:
+    Tests: 15/15 (100%)
+    Tiempo: 3m 18s
+    Errores: 0
+
+  Archivos creados:
+    - sql/migrate_etapa_5_sincronizacion.sql (45 líneas)
+    - src/nodes/sincronizador_hibrido_node.py (180 líneas)
+    - src/workers/retry_worker.py (95 líneas)
+    - tests/Etapa_5/* (3 archivos, 15 tests)
+
+  Migración ejecutada: ✅
+  Estado: ✅ COMPLETADO
+
+  ⚠️ RECORDATORIO FINAL
+
+  Si un test falla:
+  1. Lee el mensaje de error
+  2. Identifica qué esperaba el test
+  3. Corrige el CÓDIGO (no el test)
+  4. Re-ejecuta el test
+  5. Repite hasta que pase
+
+  Solo modifica el test si:
+  - Tiene un typo evidente
+  - Usa una API incorrecta
+  - Tiene lógica incorrecta (documenta el por qué)
+
+  Principio clave:
+  BD médica SIEMPRE es válida. Google Calendar es solo visualización.
+  Si falla Google → Cita sigue siendo válida y se reintenta después.
+
+  ---

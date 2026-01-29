@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, TypedDict, Annotated
 from langchain_core.messages import HumanMessage
@@ -19,7 +20,7 @@ from src.utils.logging_config import (
 logger = setup_colored_logging()
 
 # Import graph desde el proyecto actual
-from src.graph_whatsapp import crear_grafo
+from src.graph_whatsapp import crear_grafo_whatsapp
 from src.utils.session_manager import get_or_create_session
 from src.embeddings.local_embedder import warmup_embedder
 import psycopg  # ✅ Para conexión a BD (rolling window)
@@ -61,8 +62,18 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+# ✅ Configurar CORS para permitir peticiones del simulador
+# NOTA: En producción, cambiar allow_origins=["*"] por dominios específicos
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Permitir todos los orígenes (desarrollo/simulador local)
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Crear grafo una vez al inicio
-grafo = crear_grafo()
+grafo = crear_grafo_whatsapp()
 
 # ✅ Conexión global a PostgreSQL para rolling window de sesiones
 try:
@@ -81,6 +92,18 @@ except Exception as e:
 
 class UserInput(BaseModel):
     user_input: str
+
+@app.get("/")
+async def root():
+    """
+    Endpoint raíz para verificar que el servidor está funcionando.
+    """
+    return {
+        "status": "ok", 
+        "message": "🏥 Backend Médico FastAPI funcionando",
+        "timestamp": pendulum.now('America/Tijuana').to_iso8601_string(),
+        "endpoints": ["/health", "/api/whatsapp-agent/message", "/docs"]
+    }
 
 @app.post("/clear-logs")
 async def clear_logs_endpoint():

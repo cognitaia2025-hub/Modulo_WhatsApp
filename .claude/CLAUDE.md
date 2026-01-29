@@ -6,6 +6,53 @@
 
 ---
 
+## 🎯 REGLA DE ORO: Match the Energy
+
+**Pregunta sencilla → Respuesta sencilla (3-5 líneas)**  
+**Trabajo complejo → Respuesta detallada**
+
+❌ NO escribir ensayos de 1000 líneas para preguntas de sí/no  
+✅ Ahorrar tokens para cuando realmente se necesiten
+
+Ejemplos:
+- "¿Pruebo funciones o llamo LLM?" → "Prueba funciones directamente. No LLM."
+- "¿Está bien esto?" → "Sí" o "No, porque X"
+- "Crea una evaluación completa" → [Documento detallado]
+
+---
+
+## 🧪 REGLAS DE TESTING (CRÍTICO)
+
+### Para TODOS los prompts de etapas:
+
+**Regla de Oro:** El test es la verdad. El código se adapta al test.
+
+1. **Tests integrales y confiables** - Deben validar funcionalidad real
+2. **Si código falla → Reparar CÓDIGO, NO modificar test**
+3. **Solo modificar test si:** está mal configurado o es un bug del test
+4. **Ubicación:** `tests/Etapa_X/` donde X es el número de etapa
+5. **Documentación:** README.md en carpeta de tests
+
+### Incluir en cada prompt de etapa:
+```markdown
+## 🧪 TESTING (OBLIGATORIO)
+
+**Ubicación:** tests/Etapa_X/
+
+**Regla Crítica:**
+❌ NO modifiques el test para que pase
+✅ Repara el CÓDIGO si el test falla
+Solo modifica el test si está mal configurado
+
+**Mínimo requerido:**
+- [ ] X tests implementados
+- [ ] 100% de tests pasando
+- [ ] Cobertura >95%
+- [ ] README.md de tests
+```
+
+---
+
 ## 🎯 Misión Principal
 
 Supervisar la implementación del **PLAN_ESTRUCTURADO_IMPLEMENTACION.md** etapa por etapa, asegurando:

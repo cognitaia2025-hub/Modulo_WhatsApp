@@ -497,6 +497,361 @@ El evento se eliminará automáticamente de Google Calendar."""
     except Exception as e:
         return f"❌ Error al cancelar cita: {str(e)}"
 
+# ===== HERRAMIENTA 7: CONFIRMAR CITA =====
+
+@tool
+def confirmar_cita_medica(
+    doctor_phone: str,
+    cita_id: int,
+    notas_confirmacion: str = None
+) -> str:
+    """
+    Confirma una cita médica programada.
+    
+    Args:
+        doctor_phone: Número de teléfono del doctor
+        cita_id: ID de la cita a confirmar
+        notas_confirmacion: Notas adicionales de confirmación (opcional)
+        
+    Returns:
+        Confirmación de la cita confirmada o mensaje de error
+    """
+    try:
+        doctor = get_doctor_by_phone(doctor_phone)
+        if not doctor:
+            return f"❌ Error: Doctor con teléfono {doctor_phone} no está registrado"
+        
+        updates = {"estado": "confirmada"}
+        if notas_confirmacion:
+            updates["notas_privadas"] = notas_confirmacion.strip()
+        
+        cita = update_appointment(cita_id, updates)
+        
+        if not cita or cita.doctor_id != doctor.id:
+            return f"❌ Error: Cita {cita_id} no encontrada o no pertenece a este doctor"
+        
+        paciente = get_patient_by_id(cita.paciente_id)
+        
+        return f"""✅ **Cita confirmada**
+
+🆔 ID Cita: {cita.id}
+👤 Paciente: {paciente.nombre_completo if paciente else 'N/A'}
+📅 Fecha: {cita.fecha_hora_inicio.strftime('%d/%m/%Y %H:%M')}
+📊 Estado: Confirmada
+{f'📝 Notas: {notas_confirmacion}' if notas_confirmacion else ''}"""
+        
+    except Exception as e:
+        return f"❌ Error al confirmar cita: {str(e)}"
+
+
+# ===== HERRAMIENTA 8: REPROGRAMAR CITA =====
+
+@tool
+def reprogramar_cita_medica(
+    doctor_phone: str,
+    cita_id: int,
+    nueva_fecha_hora: str,
+    motivo_reprogramacion: str
+) -> str:
+    """
+    Reprograma una cita médica a nueva fecha y hora.
+    
+    Args:
+        doctor_phone: Número de teléfono del doctor
+        cita_id: ID de la cita a reprogramar
+        nueva_fecha_hora: Nueva fecha y hora "YYYY-MM-DD HH:MM"
+        motivo_reprogramacion: Razón de la reprogramación
+        
+    Returns:
+        Confirmación de reprogramación o mensaje de error
+    """
+    try:
+        doctor = get_doctor_by_phone(doctor_phone)
+        if not doctor:
+            return f"❌ Error: Doctor no registrado"
+        
+        nuevo_inicio = datetime.strptime(nueva_fecha_hora, "%Y-%m-%d %H:%M")
+        if nuevo_inicio <= datetime.now():
+            return "❌ Error: La nueva fecha no puede ser en el pasado"
+        
+        nuevo_fin = nuevo_inicio + timedelta(minutes=30)
+        
+        if not check_doctor_availability(doctor.id, nuevo_inicio, nuevo_fin):
+            return f"❌ Error: Doctor no disponible en {nueva_fecha_hora}"
+        
+        updates = {
+            "fecha_hora_inicio": nuevo_inicio,
+            "fecha_hora_fin": nuevo_fin,
+            "notas_privadas": f"Reprogramada: {motivo_reprogramacion}"
+        }
+        
+        cita = update_appointment(cita_id, updates)
+        
+        if not cita or cita.doctor_id != doctor.id:
+            return f"❌ Error: Cita no encontrada"
+        
+        paciente = get_patient_by_id(cita.paciente_id)
+        
+        return f"""✅ **Cita reprogramada**
+
+🆔 ID: {cita.id}
+👤 Paciente: {paciente.nombre_completo if paciente else 'N/A'}
+📅 Nueva fecha: {nuevo_inicio.strftime('%d/%m/%Y %H:%M')}
+🔄 Motivo: {motivo_reprogramacion}"""
+        
+    except ValueError:
+        return "❌ Error: Fecha en formato incorrecto"
+    except Exception as e:
+        return f"❌ Error: {str(e)}"
+
+
+# ===== HERRAMIENTA 9: CONSULTAR HISTORIAL PACIENTE =====
+
+@tool
+def consultar_historial_paciente(
+    doctor_phone: str,
+    paciente_id: int,
+    ultimas_n_notas: int = 10
+) -> str:
+    """
+    Consulta el historial médico de un paciente.
+    
+    Args:
+        doctor_phone: Número de teléfono del doctor
+        paciente_id: ID del paciente
+        ultimas_n_notas: Número de notas recientes a mostrar (default: 10)
+        
+    Returns:
+        Historial médico del paciente
+    """
+    try:
+        doctor = get_doctor_by_phone(doctor_phone)
+        if not doctor:
+            return "❌ Error: Doctor no registrado"
+        
+        paciente = get_patient_by_id(paciente_id)
+        if not paciente or paciente.doctor_id != doctor.id:
+            return "❌ Error: Paciente no encontrado o no pertenece a este doctor"
+        
+        # Importar aquí para evitar circular import
+        from .crud import get_patient_history
+        
+        historiales = get_patient_history(paciente_id, limit=ultimas_n_notas)
+        
+        resultado = f"""📋 **Historial Médico - {paciente.nombre_completo}**
+👤 ID Paciente: {paciente_id}
+📱 Teléfono: {paciente.telefono}
+⚠️ Alergias: {paciente.alergias or 'Ninguna'}
+
+📝 **Últimas {len(historiales)} notas:**
+
+"""
+        
+        if not historiales:
+            resultado += "• Sin historial médico registrado\n"
+        else:
+            for i, hist in enumerate(historiales, 1):
+                fecha = hist.fecha.strftime('%d/%m/%Y %H:%M') if hist.fecha else 'N/A'
+                resultado += f"""**{i}. {fecha}**
+{hist.nota}
+
+---
+
+"""
+        
+        return resultado.strip()
+        
+    except Exception as e:
+        return f"❌ Error: {str(e)}"
+
+
+# ===== HERRAMIENTA 10: AGREGAR NOTA A HISTORIAL =====
+
+@tool
+def agregar_nota_historial(
+    doctor_phone: str,
+    paciente_id: int,
+    nota: str
+) -> str:
+    """
+    Agrega una nota al historial médico del paciente.
+    
+    Args:
+        doctor_phone: Número de teléfono del doctor
+        paciente_id: ID del paciente
+        nota: Nota médica a registrar
+        
+    Returns:
+        Confirmación de nota agregada
+    """
+    try:
+        doctor = get_doctor_by_phone(doctor_phone)
+        if not doctor:
+            return "❌ Error: Doctor no registrado"
+        
+        paciente = get_patient_by_id(paciente_id)
+        if not paciente or paciente.doctor_id != doctor.id:
+            return "❌ Error: Paciente no encontrado"
+        
+        if not nota or len(nota.strip()) < 5:
+            return "❌ Error: La nota debe tener al menos 5 caracteres"
+        
+        # Importar aquí para evitar circular import
+        from .crud import add_patient_history_note
+        
+        historial = add_patient_history_note(
+            paciente_id=paciente_id,
+            doctor_id=doctor.id,
+            nota=nota.strip()
+        )
+        
+        return f"""✅ **Nota agregada al historial**
+
+👤 Paciente: {paciente.nombre_completo}
+📅 Fecha: {historial.fecha.strftime('%d/%m/%Y %H:%M')}
+📝 Nota registrada exitosamente
+
+La nota ha sido guardada en el historial médico del paciente."""
+        
+    except Exception as e:
+        return f"❌ Error: {str(e)}"
+
+
+# ===== HERRAMIENTA 11: OBTENER CITAS DEL DOCTOR =====
+
+@tool
+def obtener_citas_doctor(
+    doctor_phone: str,
+    fecha_inicio: str = None,
+    fecha_fin: str = None,
+    estado: str = None
+) -> str:
+    """
+    Obtiene las citas del doctor filtradas por fecha y/o estado.
+    
+    Args:
+        doctor_phone: Número de teléfono del doctor
+        fecha_inicio: Fecha inicio en formato "YYYY-MM-DD" (opcional, default: hoy)
+        fecha_fin: Fecha fin en formato "YYYY-MM-DD" (opcional, default: 7 días)
+        estado: Estado de citas a filtrar (opcional: programada, confirmada, etc.)
+        
+    Returns:
+        Lista de citas del doctor
+    """
+    try:
+        doctor = get_doctor_by_phone(doctor_phone)
+        if not doctor:
+            return "❌ Error: Doctor no registrado"
+        
+        # Defaults
+        inicio = datetime.now().date()
+        if fecha_inicio:
+            try:
+                inicio = datetime.strptime(fecha_inicio, "%Y-%m-%d").date()
+            except ValueError:
+                return "❌ Error: fecha_inicio debe ser YYYY-MM-DD"
+        
+        fin = inicio + timedelta(days=7)
+        if fecha_fin:
+            try:
+                fin = datetime.strptime(fecha_fin, "%Y-%m-%d").date()
+            except ValueError:
+                return "❌ Error: fecha_fin debe ser YYYY-MM-DD"
+        
+        # Importar aquí
+        from .crud import get_doctor_appointments
+        
+        citas = get_doctor_appointments(
+            doctor_id=doctor.id,
+            fecha_inicio=inicio,
+            fecha_fin=fin,
+            estado=estado
+        )
+        
+        resultado = f"""📅 **Citas del Doctor**
+📆 Periodo: {inicio.strftime('%d/%m/%Y')} - {fin.strftime('%d/%m/%Y')}
+{f'📊 Estado: {estado}' if estado else ''}
+
+"""
+        
+        if not citas:
+            resultado += "• Sin citas en este periodo\n"
+        else:
+            for i, cita in enumerate(citas, 1):
+                paciente = get_patient_by_id(cita.paciente_id)
+                fecha = cita.fecha_hora_inicio.strftime('%d/%m/%Y %H:%M')
+                resultado += f"""**{i}. {fecha}** - {cita.estado.title()}
+👤 Paciente: {paciente.nombre_completo if paciente else 'N/A'}
+📝 Motivo: {cita.motivo_consulta or 'No especificado'}
+
+"""
+        
+        resultado += f"\n✅ Total: {len(citas)} citas"
+        
+        return resultado.strip()
+        
+    except Exception as e:
+        return f"❌ Error: {str(e)}"
+
+
+# ===== HERRAMIENTA 12: BUSCAR PACIENTE POR NOMBRE =====
+
+@tool
+def buscar_paciente_por_nombre(
+    doctor_phone: str,
+    nombre: str,
+    incluir_inactivos: bool = False
+) -> str:
+    """
+    Busca pacientes por nombre (búsqueda parcial).
+    
+    Args:
+        doctor_phone: Número de teléfono del doctor
+        nombre: Nombre o parte del nombre del paciente
+        incluir_inactivos: Si incluir pacientes inactivos (default: False)
+        
+    Returns:
+        Lista de pacientes que coinciden con el nombre
+    """
+    try:
+        doctor = get_doctor_by_phone(doctor_phone)
+        if not doctor:
+            return "❌ Error: Doctor no registrado"
+        
+        if not nombre or len(nombre.strip()) < 2:
+            return "❌ Error: El nombre debe tener al menos 2 caracteres"
+        
+        pacientes = search_patients(doctor.id, nombre.strip())
+        
+        if not pacientes:
+            return f"""🔍 **No se encontraron pacientes**
+
+Búsqueda: "{nombre}"
+No hay pacientes que coincidan."""
+        
+        resultado = f"""🔍 **Pacientes encontrados ({len(pacientes)})**
+Búsqueda: "{nombre}"
+
+"""
+        
+        for i, p in enumerate(pacientes, 1):
+            ultima_cita = "Sin citas" if not p.ultima_cita else p.ultima_cita.strftime('%d/%m/%Y')
+            resultado += f"""**{i}. {p.nombre_completo}** (ID: {p.id})
+📱 {p.telefono}
+📧 {p.email or 'Sin email'}
+📅 Última cita: {ultima_cita}
+⚠️ Alergias: {p.alergias or 'Ninguna'}
+
+---
+
+"""
+        
+        return resultado.strip()
+        
+    except Exception as e:
+        return f"❌ Error: {str(e)}"
+
+
 # ===== LISTA DE HERRAMIENTAS PARA REGISTRO =====
 
 MEDICAL_TOOLS = [
@@ -505,7 +860,13 @@ MEDICAL_TOOLS = [
     consultar_slots_disponibles,
     agendar_cita_medica_completa,
     modificar_cita_medica,
-    cancelar_cita_medica
+    cancelar_cita_medica,
+    confirmar_cita_medica,
+    reprogramar_cita_medica,
+    consultar_historial_paciente,
+    agregar_nota_historial,
+    obtener_citas_doctor,
+    buscar_paciente_por_nombre
 ]
 
 def get_medical_tools():

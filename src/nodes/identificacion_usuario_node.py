@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 
 import psycopg
+from psycopg.types.json import Json
 from dotenv import load_dotenv
 
 from src.state.agent_state import WhatsAppAgentState
@@ -72,6 +73,7 @@ def extraer_numero_telefono(mensaje_contenido: str, metadata: Dict[str, Any] = N
 def consultar_usuario_bd(phone_number: str) -> Optional[Dict[str, Any]]:
     """
     Consulta usuario en BD por número de teléfono.
+    Incluye información de doctor si aplica (ETAPA 1).
     
     Args:
         phone_number: Número en formato internacional
@@ -82,11 +84,16 @@ def consultar_usuario_bd(phone_number: str) -> Optional[Dict[str, Any]]:
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
+                # Consulta completa con LEFT JOIN a doctores
                 cur.execute("""
-                    SELECT id, phone_number, display_name, es_admin, 
-                           timezone, preferencias, created_at, last_seen
-                    FROM usuarios 
-                    WHERE phone_number = %s
+                    SELECT 
+                        u.id, u.phone_number, u.display_name, u.es_admin,
+                        u.timezone, u.preferencias, u.created_at, u.last_seen,
+                        u.tipo_usuario, u.email, u.is_active,
+                        d.id as doctor_id, d.nombre_completo, d.especialidad
+                    FROM usuarios u
+                    LEFT JOIN doctores d ON d.phone_number = u.phone_number
+                    WHERE u.phone_number = %s
                 """, (phone_number,))
                 
                 result = cur.fetchone()
@@ -99,7 +106,13 @@ def consultar_usuario_bd(phone_number: str) -> Optional[Dict[str, Any]]:
                         "timezone": result[4] or "America/Tijuana",
                         "preferencias": result[5] or {},
                         "created_at": result[6],
-                        "last_seen": result[7]
+                        "last_seen": result[7],
+                        "tipo_usuario": result[8] or "paciente_externo",
+                        "email": result[9],
+                        "is_active": result[10] if result[10] is not None else True,
+                        "doctor_id": result[11],
+                        "doctor_nombre": result[12],
+                        "especialidad": result[13]
                     }
                 return None
                 
@@ -110,7 +123,8 @@ def consultar_usuario_bd(phone_number: str) -> Optional[Dict[str, Any]]:
 
 def crear_usuario_nuevo(phone_number: str) -> Dict[str, Any]:
     """
-    Crea un nuevo registro de usuario en BD.
+    Crea un nuevo registro de usuario en BD (ETAPA 1: auto-registro).
+    Por defecto se registra como 'paciente_externo'.
     
     Args:
         phone_number: Número en formato internacional
@@ -122,36 +136,48 @@ def crear_usuario_nuevo(phone_number: str) -> Dict[str, Any]:
         # Determinar si es admin por número configurado
         es_admin = (phone_number == ADMIN_PHONE_NUMBER)
         
-        display_name = "Usuario Nuevo"
-        if es_admin:
-            display_name = "Administrador"
+        # Determinar tipo de usuario
+        tipo_usuario = "admin" if es_admin else "paciente_externo"
+        
+        display_name = "Administrador" if es_admin else "Usuario Nuevo"
         
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    INSERT INTO usuarios (phone_number, display_name, es_admin, timezone, preferencias)
-                    VALUES (%s, %s, %s, %s, %s)
-                    RETURNING id, phone_number, display_name, es_admin, timezone, preferencias, created_at
+                    INSERT INTO usuarios (
+                        phone_number, display_name, es_admin, tipo_usuario,
+                        is_active, timezone, preferencias
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id, phone_number, display_name, es_admin, 
+                              tipo_usuario, is_active, timezone, preferencias, created_at
                 """, (
                     phone_number,
-                    display_name, 
+                    display_name,
                     es_admin,
+                    tipo_usuario,
+                    True,
                     "America/Tijuana",
-                    {"primer_uso": True}
+                    Json({"primer_uso": True, "auto_registrado": True})
                 ))
                 
                 result = cur.fetchone()
                 if result:
-                    logger.info(f"✅ Usuario nuevo creado: {phone_number} (Admin: {es_admin})")
+                    logger.info(f"✅ Usuario nuevo creado: {phone_number} (Tipo: {tipo_usuario})")
                     return {
                         "id": result[0],
                         "phone_number": result[1],
                         "display_name": result[2],
                         "es_admin": result[3],
-                        "timezone": result[4],
-                        "preferencias": result[5],
-                        "created_at": result[6],
-                        "last_seen": datetime.now()
+                        "tipo_usuario": result[4],
+                        "is_active": result[5],
+                        "timezone": result[6],
+                        "preferencias": result[7],
+                        "created_at": result[8],
+                        "last_seen": datetime.now(),
+                        "doctor_id": None,
+                        "doctor_nombre": None,
+                        "especialidad": None
                     }
                     
     except Exception as e:
@@ -162,10 +188,15 @@ def crear_usuario_nuevo(phone_number: str) -> Dict[str, Any]:
             "phone_number": phone_number,
             "display_name": "Usuario Temporal",
             "es_admin": (phone_number == ADMIN_PHONE_NUMBER),
+            "tipo_usuario": "admin" if (phone_number == ADMIN_PHONE_NUMBER) else "paciente_externo",
+            "is_active": True,
             "timezone": "America/Tijuana",
             "preferencias": {},
             "created_at": datetime.now(),
-            "last_seen": datetime.now()
+            "last_seen": datetime.now(),
+            "doctor_id": None,
+            "doctor_nombre": None,
+            "especialidad": None
         }
 
 
@@ -232,35 +263,51 @@ def nodo_identificacion_usuario(state: WhatsAppAgentState) -> WhatsAppAgentState
         # Usuario registrado
         logger.info(f"    ✅ Usuario REGISTRADO: {usuario_existente['display_name']}")
         
-        # Cargar datos en estado
+        # Cargar datos en estado (ETAPA 1)
         state["user_id"] = phone_number
         state["es_admin"] = usuario_existente["es_admin"] 
         state["usuario_info"] = usuario_existente
         state["usuario_registrado"] = True
+        state["tipo_usuario"] = usuario_existente.get("tipo_usuario", "paciente_externo")
+        state["doctor_id"] = usuario_existente.get("doctor_id")
+        state["paciente_id"] = None  # Se carga en otro nodo si es necesario
         
         # Actualizar última actividad
         actualizar_ultima_actividad(phone_number)
         
     else:
-        # Usuario nuevo - auto-registro
+        # Usuario nuevo - auto-registro (ETAPA 1)
         logger.info(f"    🆕 Usuario NUEVO - Creando registro automático")
         
         nuevo_usuario = crear_usuario_nuevo(phone_number)
         
-        # Cargar datos en estado
+        # Cargar datos en estado (ETAPA 1)
         state["user_id"] = phone_number
         state["es_admin"] = nuevo_usuario["es_admin"]
         state["usuario_info"] = nuevo_usuario  
         state["usuario_registrado"] = False
+        state["tipo_usuario"] = nuevo_usuario.get("tipo_usuario", "paciente_externo")
+        state["doctor_id"] = nuevo_usuario.get("doctor_id")
+        state["paciente_id"] = None
     
-    # 3. Log final del estado de identificación
-    admin_status = "👑 ADMINISTRADOR" if state["es_admin"] else "👤 Usuario"
+    # 3. Log final del estado de identificación (ETAPA 1)
+    tipo_emoji = {
+        "admin": "👑",
+        "doctor": "👨‍⚕️",
+        "personal": "👤",
+        "paciente_externo": "🧑"
+    }
+    emoji = tipo_emoji.get(state["tipo_usuario"], "👤")
+    
     registro_status = "Existente" if state["usuario_registrado"] else "Nuevo"
     
     logger.info(f"    🎯 Identificación completa:")
-    logger.info(f"       • Tipo: {admin_status}")
+    logger.info(f"       • Tipo: {emoji} {state['tipo_usuario']}")
     logger.info(f"       • Estado: {registro_status}")
     logger.info(f"       • Nombre: {state['usuario_info']['display_name']}")
+    if state["doctor_id"]:
+        logger.info(f"       • Doctor ID: {state['doctor_id']}")
+        logger.info(f"       • Especialidad: {state['usuario_info'].get('especialidad', 'N/A')}")
     
     return state
 
@@ -281,9 +328,14 @@ def nodo_identificacion_usuario_wrapper(state: WhatsAppAgentState) -> WhatsAppAg
             "phone_number": "+526641234567",
             "display_name": "Usuario Temporal", 
             "es_admin": True,
+            "tipo_usuario": "admin",
             "timezone": "America/Tijuana",
-            "preferencias": {}
+            "preferencias": {},
+            "doctor_id": None
         }
         state["usuario_registrado"] = False
+        state["tipo_usuario"] = "admin"
+        state["doctor_id"] = None
+        state["paciente_id"] = None
         
         return state

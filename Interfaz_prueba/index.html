@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🏥 Simulador Médico WhatsApp - Sistema de Citas</title>
+    <link rel="stylesheet" href="styles.css">
+    <!-- Iconos locales en lugar de CDN para evitar bloqueos -->
+    <style>
+        .fas::before { content: "🔧"; }
+        .fa-user-md::before { content: "👨‍⚕️"; }
+        .fa-plus::before { content: "➕"; }
+        .fa-paper-plane::before { content: "📤"; }
+        .fa-calendar::before { content: "📅"; }
+        .fa-clock::before { content: "🕐"; }
+        .fa-cog::before { content: "⚙️"; }
+        .fa-trash::before { content: "🗑️"; }
+        .fa-check::before { content: "✅"; }
+        .fa-times::before { content: "❌"; }
+    </style>
+</head>
+<body>
+
+    <div class="app-container">
+        
+        <!-- Sidebar Izquierdo: Usuarios -->
+        <aside class="sidebar">
+            <header class="sidebar-header">
+                <h2><i class="fas fa-user-md"></i> Sistema Médico</h2>
+                <div class="status-indicator">
+                    <span class="status-dot" id="statusDot"></span>
+                    <span id="statusText">Verificando...</span>
+                </div>
+            </header>
+            
+            <div id="userList" class="user-list">
+                <!-- Se llena dinámicamente -->
+            </div>
+
+            <button class="add-user-btn" onclick="abrirEditorUsuarios()">
+                <i class="fas fa-plus"></i> Editar / Agregar Usuarios
+            </button>
+        </aside>
+
+        <!-- Chat Central -->
+        <main class="chat-area">
+            <header class="chat-header">
+                <div id="activeUserAvatar" class="user-avatar" style="display:none"></div>
+                <h3 id="chatTitle">Seleccione un usuario para comenzar</h3>
+            </header>
+
+            <section id="chatMessages" class="chat-messages">
+                <!-- Mensajes aquí -->
+            </section>
+
+            <footer class="chat-input-area">
+                <input type="text" id="messageInput" placeholder="Escribe un mensaje aquí...">
+                <button id="btnEnviar" class="send-btn">
+                    <i class="fas fa-paper-plane"></i>
+                </button>
+            </footer>
+        </main>
+
+        <!-- Panel Derecho: Controles -->
+        <aside class="control-sidebar">
+            <div class="control-section">
+                <h3><i class="fas fa-clock"></i> Simulador Tiempo</h3>
+                <div class="simulador-controls">
+                    <label>Fecha:</label>
+                    <input type="date" id="datePicker">
+                    <label>Hora:</label>
+                    <input type="time" id="timePicker">
+                    
+                    <div class="btn-group">
+                        <button id="btnAplicarFecha" class="btn-primary">Aplicar</button>
+                        <button id="btnAhora" class="btn-secondary">Ahora</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="control-section">
+                <h3><i class="fas fa-magic"></i> Quick Replies</h3>
+                <div id="quickReplies" class="quick-replies">
+                    <!-- Botones dinámicos -->
+                    <p style="color: #667781; font-size: 0.8rem;">Seleccione un usuario para ver sugerencias</p>
+                </div>
+            </div>
+
+            <div class="control-section">
+                <h3><i class="fas fa-cog"></i> Configuración</h3>
+                <button id="btnEditarUsuarios" class="btn-primary" style="width: 100%; margin-bottom: 10px;">
+                    <i class="fas fa-edit"></i> Editar Usuarios
+                </button>
+                <button id="btnLimpiarChat" class="btn-secondary" style="width: 100%; margin-bottom: 10px;">
+                    <i class="fas fa-trash"></i> Limpiar Chat
+                </button>
+                <button id="btnVerificarConexion" class="btn-info" style="width: 100%;">
+                    <i class="fas fa-satellite-dish"></i> Verificar Servidor
+                </button>
+            </div>
+            
+            <div class="control-section">
+                <h3><i class="fas fa-info-circle"></i> Información</h3>
+                <div class="info-panel">
+                    <p><strong>Backend:</strong> localhost:8001</p>
+                    <p><strong>Endpoint:</strong> /api/whatsapp-agent/message</p>
+                    <p><strong>Estado:</strong> <span id="serverStatus">Verificando...</span></p>
+                </div>
+            </div>
+        </aside>
+
+    </div>
+
+    <!-- Modal Editor JSON -->
+    <div id="modalEditor" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-users"></i> Configurar Usuarios del Sistema</h3>
+                <button id="btnCerrarModal" style="background:none; border:none; font-size: 1.5rem; cursor:pointer;">&times;</button>
+            </div>
+            <textarea id="jsonEditor" class="json-editor"></textarea>
+            <div class="modal-footer">
+                <button id="btnGuardarJSON" class="btn-primary">Guardar Cambios</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

@@ -40,6 +40,8 @@ class EstadoSincronizacion(enum.Enum):
     pendiente = "pendiente"
     sincronizada = "sincronizada"
     error = "error"
+    reintentando = "reintentando"
+    error_permanente = "error_permanente"
 
 class Doctores(Base):
     __tablename__ = 'doctores'
@@ -118,8 +120,13 @@ class CitasMedicas(Base):
     proxima_cita = Column(Date)
     notas_privadas = Column(Text)
     google_event_id = Column(String)
+    sincronizada_google = Column(Boolean, default=False)
     costo_consulta = Column(DECIMAL(10,2))
     metodo_pago = Column(Enum(MetodoPago), default=MetodoPago.efectivo)
+    # Columnas para recordatorios (Etapa 6)
+    recordatorio_enviado = Column(Boolean, default=False)
+    recordatorio_fecha_envio = Column(DateTime)
+    recordatorio_intentos = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
     
@@ -164,8 +171,10 @@ class SincronizacionCalendar(Base):
     cita_id = Column(Integer, ForeignKey('citas_medicas.id'), nullable=False)
     google_event_id = Column(String)
     estado = Column(Enum(EstadoSincronizacion), default=EstadoSincronizacion.pendiente)
-    ultimo_intento = Column(DateTime)
+    ultimo_intento = Column(DateTime, default=datetime.now)
     siguiente_reintento = Column(DateTime)
+    intentos = Column(Integer, default=0)
+    max_intentos = Column(Integer, default=5)
     error_message = Column(Text)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)

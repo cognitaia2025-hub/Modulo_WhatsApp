@@ -20,6 +20,7 @@ import os
 
 from src.state.agent_state import WhatsAppAgentState
 from src.database import get_herramientas_disponibles
+from src.medical.tools import MEDICAL_TOOLS
 from src.utils.logging_config import (
     log_separator, 
     log_node_io, 
@@ -29,6 +30,57 @@ from src.utils.logging_config import (
 
 load_dotenv()
 logger = logging.getLogger(__name__)
+
+
+def obtener_herramientas_segun_clasificacion(
+    clasificacion: str,
+    tipo_usuario: str
+) -> List[Dict[str, str]]:
+    """
+    Obtiene herramientas disponibles según clasificación del mensaje
+    
+    Args:
+        clasificacion: Clasificación del mensaje ('personal', 'medica', 'chat', 'solicitud_cita_paciente')
+        tipo_usuario: Tipo de usuario ('doctor', 'paciente_externo', etc.)
+        
+    Returns:
+        Lista de herramientas disponibles
+    """
+    herramientas = []
+    
+    # Clasificación: personal → herramientas de calendario
+    if clasificacion == "personal":
+        herramientas = get_herramientas_disponibles()
+    
+    # Clasificación: medica → herramientas médicas (solo doctores)
+    elif clasificacion == "medica":
+        if tipo_usuario == "doctor":
+            # Convertir herramientas médicas a formato compatible
+            for tool in MEDICAL_TOOLS:
+                herramientas.append({
+                    'id_tool': tool.name,
+                    'description': tool.description
+                })
+        else:
+            logger.warning(f"⚠️  Usuario tipo '{tipo_usuario}' no puede usar herramientas médicas")
+    
+    # Clasificación: solicitud_cita_paciente → herramientas limitadas
+    elif clasificacion == "solicitud_cita_paciente":
+        # Solo herramientas de consulta y agendamiento
+        for tool in MEDICAL_TOOLS:
+            if tool.name in ["consultar_slots_disponibles", "agendar_cita_medica_completa"]:
+                herramientas.append({
+                    'id_tool': tool.name,
+                    'description': tool.description
+                })
+    
+    # Clasificación: chat → sin herramientas
+    elif clasificacion == "chat":
+        herramientas = []
+    
+    logger.info(f"  📦 Herramientas para '{clasificacion}': {len(herramientas)}")
+    return herramientas
+
 
 # LLM principal para selección (DeepSeek)
 llm_primary = ChatOpenAI(
@@ -186,14 +238,15 @@ def parsear_respuesta_llm(respuesta: str, herramientas_disponibles: List[Dict[st
 
 def nodo_seleccion_herramientas(state: WhatsAppAgentState) -> Dict:
     """
-    Nodo 4: Selecciona herramientas de Google Calendar basándose en la conversación
+    Nodo 4: Selecciona herramientas basándose en la conversación y clasificación
     
     Flujo:
-    1. Obtiene herramientas disponibles (con caché de 5 min)
-    2. Extrae último mensaje del usuario
-    3. Consulta LLM para selección inteligente
-    4. Parsea respuesta a lista de IDs
-    5. Actualiza state['herramientas_seleccionadas']
+    1. Obtiene clasificación del mensaje (de filtrado_inteligente)
+    2. Obtiene herramientas según clasificación y tipo de usuario
+    3. Extrae último mensaje del usuario
+    4. Consulta LLM para selección inteligente
+    5. Parsea respuesta a lista de IDs
+    6. Actualiza state['herramientas_seleccionadas']
     
     Args:
         state: WhatsAppAgentState con mensajes y contexto
@@ -208,11 +261,27 @@ def nodo_seleccion_herramientas(state: WhatsAppAgentState) -> Dict:
     log_node_io(logger, "INPUT", "NODO_4_SELECCION", state_input)
     
     try:
-        # 1. Obtener herramientas disponibles (usa caché si está vigente)
-        herramientas = get_herramientas_disponibles()
+        # 1. Obtener clasificación y tipo de usuario
+        clasificacion = state.get('clasificacion_mensaje', 'personal')
+        tipo_usuario = state.get('tipo_usuario', 'paciente_externo')
+        
+        logger.info(f"    📊 Clasificación: {clasificacion}")
+        logger.info(f"    👤 Tipo usuario: {tipo_usuario}")
+        
+        # 2. Obtener herramientas según clasificación
+        herramientas = obtener_herramientas_segun_clasificacion(
+            clasificacion=clasificacion,
+            tipo_usuario=tipo_usuario
+        )
+        
+        # Si es chat, no hay herramientas
+        if clasificacion == "chat" or not herramientas:
+            logger.info("    ℹ️  Sin herramientas necesarias (chat o sin acceso)")
+            return {'herramientas_seleccionadas': []}
+        
         logger.info(f"    📦 Herramientas disponibles: {len(herramientas)}")
         
-        # 2. Extraer último mensaje del usuario
+        # 3. Extraer último mensaje del usuario
         mensaje_usuario = extraer_ultimo_mensaje_usuario(state)
         
         if not mensaje_usuario:
@@ -221,20 +290,20 @@ def nodo_seleccion_herramientas(state: WhatsAppAgentState) -> Dict:
         
         log_user_message(logger, mensaje_usuario)
         
-        # 3. Obtener contexto episódico si existe
+        # 4. Obtener contexto episódico si existe
         contexto = state.get('contexto_episodico')
         tiene_contexto = contexto and contexto.get('episodios_recuperados')
         
         logger.info(f"    📖 Contexto episódico disponible: {tiene_contexto}")
         
-        # 4. Construir prompt para LLM
+        # 5. Construir prompt para LLM
         prompt = construir_prompt_seleccion(
             mensaje_usuario=mensaje_usuario,
             herramientas=herramientas,
             contexto_episodico=contexto
         )
         
-        # 5. Consultar LLM para selección inteligente
+        # 6. Consultar LLM para selección inteligente
         logger.info("    🤖 Consultando LLM para selección...")
         
         respuesta = llm_selector.invoke(prompt)
@@ -243,7 +312,7 @@ def nodo_seleccion_herramientas(state: WhatsAppAgentState) -> Dict:
         # Log detallado de interacción con LLM
         log_llm_interaction(logger, "DeepSeek/Claude", prompt, respuesta_texto, truncate_prompt=800, truncate_response=200)
         
-        # 6. Parsear respuesta a lista de IDs con mapeo robusto
+        # 7. Parsear respuesta a lista de IDs con mapeo robusto
         ids_seleccionados = parsear_respuesta_llm(respuesta_texto, herramientas)
         
         logger.info(f"    ✅ Herramientas seleccionadas: {ids_seleccionados}")
@@ -258,14 +327,22 @@ def nodo_seleccion_herramientas(state: WhatsAppAgentState) -> Dict:
         }
         
     except Exception as e:
-        # Fallback: selección por defecto (list + create)
+        # Fallback: según clasificación
         logger.error(f"    ❌ Error en selección de herramientas: {e}")
         logger.info("    🔄 Usando herramientas por defecto (fallback)")
+        
+        clasificacion = state.get('clasificacion_mensaje', 'personal')
+        fallback_tools = []
+        
+        if clasificacion == "personal":
+            fallback_tools = ['list_calendar_events']
+        elif clasificacion in ["medica", "solicitud_cita_paciente"]:
+            fallback_tools = ['consultar_slots_disponibles']
         
         log_separator(logger, "NODO_4_SELECCION_HERRAMIENTAS", "FIN")
         
         return {
-            'herramientas_seleccionadas': ['list_calendar_events', 'create_calendar_event']
+            'herramientas_seleccionadas': fallback_tools
         }
 
 

@@ -4,7 +4,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, func, text
 from datetime import datetime, date, timedelta, time
-from typing import List, Dict, Optional, Union
+from typing import List, Dict, Optional, Union, Any
 import json
 
 from .models import (
@@ -87,6 +87,59 @@ def get_patient_by_id(patient_id: int) -> Optional[Pacientes]:
     """Obtiene paciente por ID"""
     with get_db_session() as db:
         return db.query(Pacientes).filter(Pacientes.id == patient_id).first()
+
+def get_paciente_by_phone(phone_number: str) -> Optional[Pacientes]:
+    """Obtiene paciente por número de teléfono"""
+    with get_db_session() as db:
+        return db.query(Pacientes).filter(Pacientes.telefono == phone_number).first()
+
+def registrar_paciente_externo(phone_number: str, nombre: str) -> Dict[str, Any]:
+    """
+    Registra un paciente externo en el sistema.
+    
+    Args:
+        phone_number: Número de teléfono del paciente
+        nombre: Nombre completo del paciente
+        
+    Returns:
+        Dict con paciente_id y es_nuevo
+    """
+    with get_db_session() as db:
+        # Verificar si ya existe
+        paciente_existente = db.query(Pacientes).filter(
+            Pacientes.telefono == phone_number
+        ).first()
+        
+        if paciente_existente:
+            # Actualizar timestamp de última interacción
+            paciente_existente.ultima_cita = datetime.now()
+            db.commit()
+            return {
+                "paciente_id": paciente_existente.id,
+                "es_nuevo": False,
+                "nombre": paciente_existente.nombre_completo
+            }
+        
+        # Crear nuevo paciente externo
+        # Por defecto asignar al doctor 1 (Santiago) - se puede cambiar después al agendar
+        patient_data = {
+            "doctor_id": 1,  # Default: Santiago
+            "nombre_completo": nombre.strip(),
+            "telefono": phone_number.strip(),
+            "created_at": datetime.now(),
+            "ultima_cita": None
+        }
+        
+        nuevo_paciente = Pacientes(**patient_data)
+        db.add(nuevo_paciente)
+        db.commit()
+        db.refresh(nuevo_paciente)
+        
+        return {
+            "paciente_id": nuevo_paciente.id,
+            "es_nuevo": True,
+            "nombre": nuevo_paciente.nombre_completo
+        }
 
 def get_patients_by_doctor(doctor_id: int, limit: int = 50) -> List[Pacientes]:
     """Obtiene todos los pacientes de un doctor"""

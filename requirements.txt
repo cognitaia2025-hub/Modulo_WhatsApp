@@ -23,3 +23,4 @@ passlib[bcrypt]>=1.7.4
 sqlalchemy>=2.0.0
 pendulum
 colorama
+schedule==1.2.0

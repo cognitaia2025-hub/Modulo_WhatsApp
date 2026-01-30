@@ -4,25 +4,108 @@ Esta interfaz permite simular conversaciones de WhatsApp con el sistema médico 
 
 ## 🚀 Cómo usar el simulador
 
-### 1. **Iniciar el Backend Médico**
+### 1. **Instalar Dependencias**
+
+```bash
+cd Interfaz_prueba
+npm install
+```
+
+### 2. **Configurar Variables de Entorno**
+
+```bash
+cp .env.example .env
+# Editar .env si necesitas cambiar la URL del backend
+```
+
+### 3. **Iniciar el Backend Médico (Python)**
 
 **IMPORTANTE**: El sistema médico debe estar ejecutándose antes de usar el simulador.
 
-#### Opción A: Script completo (Recomendado)
-```powershell
-# Desde la raíz del proyecto
-.\start_project_whatsapp.ps1
-```
-
-#### Opción B: Solo backend
 ```bash
-# Desde la raíz del proyecto  
+# Desde la raíz del proyecto
+python app.py
+# o
 python -m uvicorn app:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### 2. **Abrir el Simulador**
-- Abre el archivo `index.html` en cualquier navegador moderno
+### 4. **Iniciar el Servidor del Simulador**
+
+```bash
+# Desde Interfaz_prueba/
+npm start
+```
+
+El simulador estará disponible en:
+- http://localhost:3002
+- http://127.0.0.1:3002
+
+### 5. **Verificar Conexión**
+- Abre el navegador en http://localhost:3002
 - Verifica que el indicador de estado muestre "🟢 Conectado"
+- Si muestra "🔴 Desconectado", verifica que el backend Python esté ejecutándose
+
+---
+
+## 📡 Arquitectura del Simulador
+
+```
+┌─────────────────┐         ┌──────────────────┐         ┌─────────────────┐
+│   Navegador     │  HTTP   │  Servidor Node   │  HTTP   │  Backend Python │
+│  (Frontend)     │ ──────► │  (Simulador)     │ ──────► │  (LangGraph)    │
+│  localhost:3002 │         │  localhost:3002  │         │  localhost:8000 │
+└─────────────────┘         └──────────────────┘         └─────────────────┘
+```
+
+### Estructura de Datos (Payload)
+
+El simulador envía los mismos datos que whatsapp-service:
+
+```json
+{
+  "chat_id": "526649876543@c.us",
+  "message": "Hola, necesito agendar una cita",
+  "sender_name": "Juan Pérez",
+  "timestamp": "2026-01-30T14:30:00.000Z",
+  "thread_id": "526649876543"
+}
+```
+
+---
+
+## 🔌 Endpoints del Simulador
+
+| Método | Endpoint | Descripción |
+|--------|----------|-------------|
+| GET | `/` | Interfaz web del simulador |
+| POST | `/api/message` | Enviar mensaje al backend (formato WhatsApp) |
+| GET | `/api/status` | Estado del simulador y backend |
+| GET | `/api/health` | Health check simple |
+| GET | `/api/patients/:phone` | Buscar paciente por teléfono |
+| POST | `/api/simulate-time` | Simular fecha/hora (opcional) |
+
+### Ejemplo de uso con cURL
+
+```bash
+# Enviar mensaje
+curl -X POST http://localhost:3002/api/message \
+  -H "Content-Type: application/json" \
+  -d '{
+    "chat_id": "526649876543@c.us",
+    "message": "Necesito agendar cita para mañana",
+    "sender_name": "Juan Pérez",
+    "timestamp": "2026-01-30T14:30:00.000Z",
+    "thread_id": "526649876543"
+  }'
+
+# Verificar estado
+curl http://localhost:3002/api/status
+
+# Health check
+curl http://localhost:3002/api/health
+```
+
+---
 
 ## 🩺 Funcionalidades del Sistema Médico
 

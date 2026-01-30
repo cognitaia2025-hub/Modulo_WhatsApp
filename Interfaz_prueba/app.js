@@ -240,25 +240,30 @@ async function verificarConexionBackend() {
     const serverStatus = document.getElementById('serverStatus');
     
     try {
-        // Verificar health endpoint
-        const response = await fetch('http://localhost:8001/health', {
+        // Verificar servidor simulador primero
+        const response = await fetch('/api/status', {
             method: 'GET',
             headers: { 'Content-Type': 'application/json' }
         });
         
         if (response.ok) {
             const data = await response.json();
+            const backendHealthy = data.backend.status === 'healthy';
+            
             if (statusDot) {
-                statusDot.className = 'status-dot online';
-                statusText.textContent = 'Conectado';
+                statusDot.className = backendHealthy ? 'status-dot online' : 'status-dot offline';
+                statusText.textContent = backendHealthy ? 'Conectado' : 'Backend offline';
             }
-            if (serverStatus) serverStatus.textContent = '🟢 Activo';
-            console.log('✅ Backend médico conectado:', data);
+            if (serverStatus) {
+                serverStatus.textContent = backendHealthy ? '🟢 Activo' : '🟡 Simulador OK, Backend OFF';
+            }
+            
+            console.log('✅ Estado del sistema:', data);
         } else {
-            throw new Error('Backend no disponible');
+            throw new Error('Simulador no disponible');
         }
     } catch (error) {
-        console.warn('⚠️ No se pudo conectar al backend:', error);
+        console.warn('⚠️ No se pudo conectar al simulador:', error);
         if (statusDot) {
             statusDot.className = 'status-dot offline';
             statusText.textContent = 'Desconectado';
@@ -326,25 +331,52 @@ async function enviarMensajeConTipeo() {
     mostrarIndicadorTipeo();
     
     try {
-        const response = await fetch('http://localhost:8001/api/whatsapp-agent/message', {
+        // Usar endpoint del servidor simulador local
+        const response = await fetch('/api/message', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
 
         // Simular delay de respuesta más realista
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        await new Promise(resolve => setTimeout(resolve, 800));
         
         ocultarIndicadorTipeo();
         
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.message || errorData.error || 'Error del servidor');
+        }
+        
         const respuesta = await response.json();
-        mostrarRespuestaBot(respuesta);
+        
+        // Extraer la respuesta del backend
+        if (respuesta.success && respuesta.response) {
+            agregarMensaje({
+                sender: '🤖 Sistema Médico',
+                text: respuesta.response,
+                timestamp: new Date().toISOString(),
+                esBot: true
+            });
+        } else {
+            throw new Error(respuesta.error || 'Sin respuesta del sistema');
+        }
     } catch (error) {
         ocultarIndicadorTipeo();
         console.error('Error al enviar mensaje:', error);
+        
+        let errorMsg = '❌ Error de conexión. ';
+        if (error.message.includes('backend_unavailable')) {
+            errorMsg += 'El backend Python no está disponible. Inicia el servidor con: python app.py';
+        } else if (error.message.includes('timeout')) {
+            errorMsg += 'El servidor tardó mucho en responder. Intenta de nuevo.';
+        } else {
+            errorMsg += error.message;
+        }
+        
         agregarMensaje({
             sender: '❌ Sistema',
-            text: 'No se pudo conectar con el backend médico (localhost:8001). Asegúrate de que el servidor esté ejecutándose.',
+            text: errorMsg,
             timestamp: new Date().toISOString(),
             esBot: true
         });

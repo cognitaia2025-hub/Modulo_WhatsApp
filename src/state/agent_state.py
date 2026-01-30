@@ -70,5 +70,12 @@ class WhatsAppAgentState(TypedDict):
     slots_disponibles: List[Dict] = []  # Lista de slots mostrados al paciente
     paciente_nombre_temporal: Optional[str] = None  # Nombre extraído antes de registro
     
+    # Campos para Slot Filling (optimización recepcionista)
+    fecha_deseada: Optional[str]  # "lunes", "25 de octubre", "mañana"
+    hora_deseada: Optional[str]  # "por la tarde", "9am", "en la mañana"
+    intencion_confirmada: bool  # Para evitar que el LLM agende por error
+    especialidad_preferida: Optional[str]  # "cardiología", "medicina general"
+    cambio_de_tema: bool  # True si el LLM detectó cambio de contexto
+    
     # Metadata
     timestamp: str

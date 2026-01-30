@@ -169,8 +169,11 @@ function agregarMensaje({ sender, text, timestamp, esBot }) {
     const date = new Date(timestamp);
     const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
+    // Convertir saltos de línea a <br> para HTML
+    const formattedText = text.replace(/\n/g, '<br>');
+
     div.innerHTML = `
-        <div class="message-text">${text}</div>
+        <div class="message-text">${formattedText}</div>
         <div class="message-time">${timeStr}</div>
     `;
     

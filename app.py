@@ -20,7 +20,7 @@ from src.utils.logging_config import (
 logger = setup_colored_logging()
 
 # Import graph desde el proyecto actual
-from src.graph_whatsapp import crear_grafo_whatsapp
+from src.graph_whatsapp_etapa8 import crear_grafo_whatsapp
 from src.utils.session_manager import get_or_create_session
 from src.embeddings.local_embedder import warmup_embedder
 import psycopg  # ✅ Para conexión a BD (rolling window)
@@ -222,17 +222,16 @@ async def whatsapp_message(data: WhatsAppMessage):
         # Generar timestamp actual (siempre en backend para consistencia)
         timestamp_actual = pendulum.now('America/Tijuana').to_iso8601_string()
 
-        # Crear estado inicial
+        # Crear estado mínimo - solo el nuevo mensaje y datos esenciales
+        # Los demás campos se restaurarán del checkpoint si existe
         estado = {
             "messages": [HumanMessage(content=data.message)],
-            "user_id": user_id,
+            "user_id": phone_number,
             "session_id": session_id,
-            "cambio_de_tema": False,
-            "sesion_expirada": False,
-            "herramientas_seleccionadas": [],
-            "resumen_actual": None,
             "timestamp": timestamp_actual
         }
+        # NOTA: NO incluimos estado_conversacion, clasificacion_mensaje, etc.
+        # Estos se restaurarán del checkpoint de LangGraph
 
         # Invocar grafo con config
         result = grafo.invoke(estado, config)

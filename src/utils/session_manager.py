@@ -135,6 +135,12 @@ def get_or_create_session(phone_number: str, db_connection=None) -> Tuple[str, s
         )
     
     try:
+        # Limpiar cualquier transacción abortada previa
+        try:
+            db_connection.rollback()
+        except:
+            pass
+            
         cursor = db_connection.cursor()
         
         # Buscar última sesión activa del usuario

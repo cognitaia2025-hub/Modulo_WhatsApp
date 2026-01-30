@@ -59,8 +59,10 @@ llm_conversacional = llm_primary.with_fallbacks([llm_fallback])
 
 # ==================== PROMPT TEMPLATES ====================
 
-PROMPT_BIENVENIDA = """Eres un asistente virtual amigable de una clínica médica.
-Un usuario te ha saludado. Responde de manera:
+# Prompts diferenciados por tipo de usuario
+
+PROMPT_BIENVENIDA_PACIENTE = """Eres un asistente virtual amigable de una clínica médica.
+Un paciente te ha saludado. Responde de manera:
 - Cálida y profesional
 - Breve (máximo 2-3 oraciones)
 - Mencionando que puedes ayudar con citas médicas
@@ -73,21 +75,92 @@ NO uses emojis excesivos. Máximo 1-2 emojis si son apropiados.
 
 Tu respuesta:"""
 
-PROMPT_GENERAL = """Eres un asistente virtual de una clínica médica.
-El usuario ha enviado un mensaje casual. Responde de manera:
+PROMPT_BIENVENIDA_DOCTOR = """Eres un asistente virtual de gestión médica para doctores.
+Un doctor te ha saludado. Responde de manera:
+- Profesional y concisa
+- Breve (máximo 2-3 oraciones)
+- Mencionando que puedes ayudarle a ver sus citas programadas, gestionar su agenda o consultar pacientes
+
+Hora actual: {hora_actual}
+Doctor: {nombre_usuario}
+Mensaje: "{mensaje}"
+
+Responde en español de México, con tono profesional.
+NO uses emojis excesivos. Máximo 1 emoji si es apropiado.
+
+Tu respuesta:"""
+
+PROMPT_BIENVENIDA_ADMIN = """Eres un asistente virtual de administración de la clínica médica.
+Un administrador del sistema te ha saludado. Responde de manera:
+- Profesional y directa
+- Breve (máximo 2-3 oraciones)
+- Mencionando que puedes ayudarle con gestión de doctores, configuración de horarios, estadísticas del sistema o administración de usuarios
+
+Hora actual: {hora_actual}
+Administrador: {nombre_usuario}
+Mensaje: "{mensaje}"
+
+Responde en español de México, con tono profesional y eficiente.
+NO uses emojis.
+
+Tu respuesta:"""
+
+PROMPT_GENERAL_PACIENTE = """Eres un asistente virtual de una clínica médica.
+Un paciente ha enviado un mensaje casual. Responde de manera:
 - Amable y servicial
 - Breve pero útil
-- Orientando hacia los servicios disponibles (citas médicas)
+- Orientando hacia los servicios disponibles
 
 Hora actual: {hora_actual}
 Mensaje del usuario: "{mensaje}"
 
-Servicios disponibles:
+Servicios disponibles para pacientes:
 - Agendar citas médicas
 - Consultar horarios disponibles
-- Gestionar citas existentes
+- Gestionar citas existentes (modificar/cancelar)
 
 Responde en español de México, de forma natural.
+
+Tu respuesta:"""
+
+PROMPT_GENERAL_DOCTOR = """Eres un asistente virtual de gestión médica.
+Un doctor ha enviado un mensaje. Responde de manera:
+- Profesional y eficiente
+- Breve pero útil
+- Orientando hacia las funcionalidades disponibles
+
+Hora actual: {hora_actual}
+Doctor: {nombre_usuario}
+Mensaje: "{mensaje}"
+
+Funcionalidades disponibles para doctores:
+- Ver citas programadas del día
+- Consultar agenda semanal
+- Ver historial de pacientes
+- Gestionar disponibilidad
+
+Responde en español de México, con tono profesional.
+
+Tu respuesta:"""
+
+PROMPT_GENERAL_ADMIN = """Eres un asistente virtual de administración de la clínica.
+Un administrador ha enviado un mensaje. Responde de manera:
+- Profesional y directo
+- Breve pero informativo
+- Orientando hacia las funcionalidades administrativas
+
+Hora actual: {hora_actual}
+Administrador: {nombre_usuario}
+Mensaje: "{mensaje}"
+
+Funcionalidades disponibles para administradores:
+- Gestión de doctores (agregar, modificar, desactivar)
+- Configuración de horarios y especialidades
+- Estadísticas y reportes del sistema
+- Administración de usuarios
+- Configuración del sistema
+
+Responde en español de México, con tono profesional y eficiente.
 
 Tu respuesta:"""
 
@@ -137,10 +210,10 @@ def nodo_respuesta_conversacional(state: Dict[str, Any]) -> Dict[str, Any]:
     Nodo para generar respuestas conversacionales (chat casual).
     
     Maneja saludos, despedidas y mensajes generales que no requieren
-    herramientas específicas.
+    herramientas específicas. Diferencia respuestas por tipo de usuario.
     
     Args:
-        state: Estado del grafo con messages, clasificacion_mensaje, etc.
+        state: Estado del grafo con messages, clasificacion_mensaje, tipo_usuario, etc.
         
     Returns:
         State actualizado con respuesta en messages y respuesta_generada
@@ -149,6 +222,8 @@ def nodo_respuesta_conversacional(state: Dict[str, Any]) -> Dict[str, Any]:
     
     clasificacion = state.get('clasificacion_mensaje', 'chat')
     mensaje = obtener_mensaje_usuario(state)
+    tipo_usuario = state.get('tipo_usuario', 'paciente')
+    nombre_usuario = state.get('nombre_usuario', 'Usuario')
     
     if not mensaje:
         logger.warning("    ⚠️  No se encontró mensaje del usuario")
@@ -156,29 +231,23 @@ def nodo_respuesta_conversacional(state: Dict[str, Any]) -> Dict[str, Any]:
     else:
         logger.info(f"    📨 Mensaje: '{mensaje[:50]}...'")
         logger.info(f"    🏷️  Clasificación: {clasificacion}")
+        logger.info(f"    👤 Tipo usuario: {tipo_usuario}")
         
         try:
             # Obtener hora actual
             hora_actual = get_current_time().format('dddd, DD [de] MMMM [de] YYYY [a las] HH:mm', locale='es')
             
-            # Seleccionar prompt según tipo de mensaje
+            # Seleccionar prompt según tipo de mensaje Y tipo de usuario
             if es_saludo(mensaje):
                 logger.info("    👋 Tipo: SALUDO")
-                prompt = PROMPT_BIENVENIDA.format(
-                    hora_actual=hora_actual,
-                    mensaje=mensaje
-                )
+                prompt = _seleccionar_prompt_bienvenida(tipo_usuario, hora_actual, mensaje, nombre_usuario)
             elif es_despedida(mensaje):
                 logger.info("    🚪 Tipo: DESPEDIDA")
-                respuesta = "¡Hasta luego! Fue un gusto atenderte. Recuerda que estamos aquí cuando necesites agendar una cita. 👋"
-                # Skip LLM for simple farewell
+                respuesta = _generar_despedida(tipo_usuario)
                 return _crear_respuesta_state(state, respuesta)
             else:
                 logger.info("    💭 Tipo: MENSAJE GENERAL")
-                prompt = PROMPT_GENERAL.format(
-                    hora_actual=hora_actual,
-                    mensaje=mensaje
-                )
+                prompt = _seleccionar_prompt_general(tipo_usuario, hora_actual, mensaje, nombre_usuario)
             
             # Invocar LLM
             logger.info("    🤖 Generando respuesta con LLM...")
@@ -189,10 +258,72 @@ def nodo_respuesta_conversacional(state: Dict[str, Any]) -> Dict[str, Any]:
             
         except Exception as e:
             logger.error(f"    ❌ Error generando respuesta: {e}")
-            # Fallback sin LLM
-            respuesta = "¡Hola! Soy el asistente virtual de la clínica. ¿Te gustaría agendar una cita médica?"
+            # Fallback sin LLM diferenciado por tipo
+            respuesta = _generar_fallback(tipo_usuario)
     
     return _crear_respuesta_state(state, respuesta)
+
+
+def _seleccionar_prompt_bienvenida(tipo_usuario: str, hora_actual: str, mensaje: str, nombre_usuario: str) -> str:
+    """Selecciona el prompt de bienvenida según el tipo de usuario."""
+    if tipo_usuario == 'admin':
+        return PROMPT_BIENVENIDA_ADMIN.format(
+            hora_actual=hora_actual,
+            mensaje=mensaje,
+            nombre_usuario=nombre_usuario
+        )
+    elif tipo_usuario == 'doctor':
+        return PROMPT_BIENVENIDA_DOCTOR.format(
+            hora_actual=hora_actual,
+            mensaje=mensaje,
+            nombre_usuario=nombre_usuario
+        )
+    else:  # paciente o desconocido
+        return PROMPT_BIENVENIDA_PACIENTE.format(
+            hora_actual=hora_actual,
+            mensaje=mensaje
+        )
+
+
+def _seleccionar_prompt_general(tipo_usuario: str, hora_actual: str, mensaje: str, nombre_usuario: str) -> str:
+    """Selecciona el prompt general según el tipo de usuario."""
+    if tipo_usuario == 'admin':
+        return PROMPT_GENERAL_ADMIN.format(
+            hora_actual=hora_actual,
+            mensaje=mensaje,
+            nombre_usuario=nombre_usuario
+        )
+    elif tipo_usuario == 'doctor':
+        return PROMPT_GENERAL_DOCTOR.format(
+            hora_actual=hora_actual,
+            mensaje=mensaje,
+            nombre_usuario=nombre_usuario
+        )
+    else:  # paciente o desconocido
+        return PROMPT_GENERAL_PACIENTE.format(
+            hora_actual=hora_actual,
+            mensaje=mensaje
+        )
+
+
+def _generar_despedida(tipo_usuario: str) -> str:
+    """Genera mensaje de despedida según tipo de usuario."""
+    if tipo_usuario == 'admin':
+        return "¡Hasta luego! El sistema queda a su disposición para la gestión administrativa."
+    elif tipo_usuario == 'doctor':
+        return "¡Hasta luego, Doctor! Estaré aquí para ayudarle con su agenda cuando lo necesite."
+    else:
+        return "¡Hasta luego! Fue un gusto atenderte. Recuerda que estamos aquí cuando necesites agendar una cita. 👋"
+
+
+def _generar_fallback(tipo_usuario: str) -> str:
+    """Genera mensaje fallback según tipo de usuario."""
+    if tipo_usuario == 'admin':
+        return "¡Hola! Soy el asistente administrativo. ¿En qué puedo ayudarle? Gestión de doctores, estadísticas o configuración del sistema."
+    elif tipo_usuario == 'doctor':
+        return "¡Hola, Doctor! Soy el asistente de gestión médica. ¿Le gustaría ver sus citas programadas o gestionar su agenda?"
+    else:
+        return "¡Hola! Soy el asistente virtual de la clínica. ¿Te gustaría agendar una cita médica?"
 
 
 def _crear_respuesta_state(state: Dict[str, Any], respuesta: str) -> Dict[str, Any]:

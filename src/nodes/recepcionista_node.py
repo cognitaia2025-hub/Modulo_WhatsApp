@@ -129,33 +129,35 @@ def _manejar_estado_inicial(paciente_phone: str, mensaje: str) -> tuple[str, str
     if not paciente:
         # Paciente nuevo - pedir nombre
         logger.info("🆕 Paciente nuevo detectado - solicitando nombre")
-        respuesta = """¡Hola! 👋 
+        respuesta = """Hola!
 
-Veo que es tu primera vez. Para poder agendarte una cita, necesito tu nombre completo.
+Veo que es tu primera vez. Para agendarte una cita, necesito tu nombre completo.
 
-¿Cuál es tu nombre?"""
+¿Cómo te llamas?"""
         
         return respuesta, 'solicitando_nombre', []
     
     else:
         # Paciente existente - mostrar opciones directamente
         nombre_paciente = paciente.get('nombre_completo', 'paciente')
+        # Limpiar nombre de sufijos de prueba
+        nombre_paciente = nombre_paciente.replace(' (Test)', '').replace(' (test)', '')
         logger.info(f"✅ Paciente existente: {nombre_paciente}")
         
         # Generar slots disponibles
         slots = generar_slots_con_turnos(dias_adelante=7)
         
         if not slots or len(slots) < 3:
-            respuesta = """¡Hola! 👋
+            respuesta = """Hola!
 
-Lo siento, no tenemos disponibilidad en los próximos días. 
+Lo siento, no tenemos disponibilidad en los próximos días.
 ¿Podrías intentar más tarde o contactarnos por teléfono?"""
             
             return respuesta, 'completado', []
         
         # Mostrar 3 opciones
         respuesta_slots = _formatear_opciones_slots(slots[:3])
-        respuesta = f"""¡Hola {nombre_paciente}! 👋
+        respuesta = f"""Hola {nombre_paciente}!
 
 {respuesta_slots}"""
         
@@ -202,9 +204,9 @@ Sin embargo, no tenemos disponibilidad en los próximos días.
         
         # Mostrar opciones
         respuesta_slots = _formatear_opciones_slots(slots[:3])
-        respuesta = f"""¡Gracias {nombre}! 😊
+        respuesta = f"""Gracias {nombre}!
 
-Ya te registré en nuestro sistema.
+Ya te registré en el sistema.
 
 {respuesta_slots}"""
         
@@ -294,14 +296,14 @@ Por favor escoge una de las opciones disponibles: {', '.join(OPCIONES_LETRAS[:le
         
         if cita_id:
             logger.info(f"✅ Cita agendada exitosamente (ID: {cita_id})")
-            respuesta = f"""🎉 ¡Perfecto! Tu cita ha sido agendada.
+            respuesta = f"""Perfecto! Tu cita ha sido agendada.
 
-📅 **Detalles de tu cita:**
+Detalles de tu cita:
 {_formatear_detalle_slot_seleccionado(slot_elegido, doctor['nombre_completo'])}
 
-📞 Si necesitas cancelar o reprogramar, contáctanos al teléfono de la clínica.
+Si necesitas cancelar o reprogramar, contáctanos al teléfono de la clínica.
 
-¡Te esperamos! 😊"""
+Te esperamos!"""
         else:
             logger.error("❌ Error agendando cita")
             respuesta = """Lo siento, no pude agendar la cita en este momento.
@@ -323,8 +325,9 @@ def _formatear_opciones_slots(slots: List[Dict]) -> str:
     """
     Formatea los slots disponibles para mostrar al paciente.
     NO menciona el doctor hasta la confirmación final.
+    Formato limpio para WhatsApp (pocos emojis, claro y conciso).
     """
-    respuesta = "🗓️ **Opciones disponibles:**\n\n"
+    lineas = ["Horarios disponibles:", ""]
     
     for i, slot in enumerate(slots):
         letra = OPCIONES_LETRAS[i]
@@ -339,11 +342,12 @@ def _formatear_opciones_slots(slots: List[Dict]) -> str:
         hora_inicio = slot['hora_inicio'][:5]  # HH:MM
         hora_fin = slot['hora_fin'][:5]      # HH:MM
         
-        respuesta += f"**{letra})** {dia_nombre.title()} {dia_numero} de {mes_nombre} - {hora_inicio} a {hora_fin}\n"
+        lineas.append(f"{letra}) {dia_nombre.title()} {dia_numero} de {mes_nombre}, {hora_inicio} - {hora_fin}")
     
-    respuesta += "\n¿Cuál te conviene más? Responde con la letra (A, B, C...)"
+    lineas.append("")
+    lineas.append("¿Cuál prefieres? Responde A, B o C")
     
-    return respuesta
+    return "\n".join(lineas)
 
 
 def _formatear_detalle_slot_seleccionado(slot: Dict, doctor_nombre: str) -> str:

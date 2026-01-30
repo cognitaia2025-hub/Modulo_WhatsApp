@@ -77,6 +77,7 @@ from src.state.agent_state import WhatsAppAgentState
 # ==================== IMPORTS DE NODOS ====================
 from src.nodes.identificacion_usuario_node import nodo_identificacion_usuario_wrapper
 from src.nodes.router_identidad_node import nodo_router_identidad_wrapper
+from src.nodes.maya_detective_paciente_node import nodo_maya_detective_paciente_wrapper
 from src.nodes.filtrado_inteligente_node import nodo_filtrado_inteligente_wrapper
 from src.nodes.recuperacion_episodica_node import nodo_recuperacion_episodica_wrapper
 from src.nodes.recuperacion_medica_node import nodo_recuperacion_medica_wrapper
@@ -250,6 +251,9 @@ def crear_grafo_whatsapp() -> StateGraph:
     # N2: Router por Identidad (NUEVO - reemplaza clasificación LLM en 98% casos)
     workflow.add_node("router_identidad", nodo_router_identidad_wrapper)
     
+    # N2A: Maya Detective de Intención (para pacientes externos)
+    workflow.add_node("maya_detective_paciente", nodo_maya_detective_paciente_wrapper)
+    
     # N2-LLM: Filtrado Inteligente (clasificación LLM - solo casos ambiguos)
     workflow.add_node("filtrado_inteligente", nodo_filtrado_inteligente_wrapper)
     
@@ -280,7 +284,7 @@ def crear_grafo_whatsapp() -> StateGraph:
     # N8: Sincronizador Híbrido (Calendar)
     workflow.add_node("sincronizador_hibrido", nodo_sincronizador_hibrido_wrapper)
     
-    logger.info("    ✓ 13 nodos añadidos correctamente")
+    logger.info("    ✓ 14 nodos añadidos correctamente (incluyendo Maya Detective)")
     
     # ==================== CONFIGURAR FLUJO Y DECISIONES ====================
     
@@ -291,6 +295,7 @@ def crear_grafo_whatsapp() -> StateGraph:
     
     # -------------------- NUEVO: Routing desde Router Identidad --------------------
     def decidir_desde_router(state: WhatsAppAgentState) -> Literal[
+        "maya_detective_paciente",  # NUEVO - para pacientes externos
         "recepcionista",
         "filtrado_inteligente",  # LLM clasificador (solo casos ambiguos)
         "recuperacion_medica",
@@ -300,9 +305,17 @@ def crear_grafo_whatsapp() -> StateGraph:
         """
         Decide la ruta según resultado del router de identidad.
         
+        PRIORIDAD MÁXIMA: Pacientes externos → Maya Detective primero
         Si requiere_clasificacion_llm=True → ir a filtrado_inteligente (LLM)
         Si no → ir directamente a la ruta determinada
         """
+        
+        tipo_usuario = state.get('tipo_usuario', '')
+        
+        # NUEVO: Pacientes externos pasan por Maya Detective primero
+        if tipo_usuario == 'paciente_externo':
+            logger.info("   → Ruta: MAYA DETECTIVE (paciente externo)")
+            return "maya_detective_paciente"
         
         if state.get('requiere_clasificacion_llm', False):
             # Solo 2% de casos - mensajes genuinamente ambiguos
@@ -330,6 +343,7 @@ def crear_grafo_whatsapp() -> StateGraph:
         "router_identidad",
         decidir_desde_router,
         {
+            "maya_detective_paciente": "maya_detective_paciente",  # NUEVO
             "recepcionista": "recepcionista",
             "filtrado_inteligente": "filtrado_inteligente",
             "recuperacion_medica": "recuperacion_medica",

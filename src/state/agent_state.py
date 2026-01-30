@@ -69,6 +69,12 @@ class WhatsAppAgentState(TypedDict):
     # Recuperación Médica (ETAPA 3)
     contexto_medico: Optional[Dict[str, Any]]  # Pacientes recientes, citas, estadísticas
     
+    # Maya Detective de Intención (ETAPA 9 - Nodo 2A)
+    respuesta_maya: Optional[str]  # Respuesta directa de Maya
+    razon_maya: Optional[str]  # Razonamiento de Maya
+    tiempo_maya_ms: Optional[int]  # Tiempo de procesamiento de Maya
+    error_maya: Optional[str]  # Error si Maya falla
+    
     # Conversación de Recepcionista (ETAPA 4)
     estado_conversacion: str = "inicial"  # inicial, solicitando_nombre, mostrando_opciones, esperando_seleccion, confirmando, completado
     slots_disponibles: List[Dict] = []  # Lista de slots mostrados al paciente

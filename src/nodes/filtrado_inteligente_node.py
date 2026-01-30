@@ -184,55 +184,47 @@ def validar_clasificacion_por_tipo_usuario(
 
 
 def registrar_clasificacion_bd(
-    user_phone: str,
+    user_id: str,
+    session_id: str,
     mensaje: str,
     clasificacion: str,
-    confianza: float,
     modelo_usado: str,
-    tipo_usuario: str,
     tiempo_ms: int,
-    hubo_fallback: bool,
-    razon_fallback: str = None
+    herramientas_seleccionadas: list = None
 ):
     """
     Registra clasificación en la base de datos para auditoría
     
     Args:
-        user_phone: Teléfono del usuario
+        user_id: ID del usuario (teléfono)
+        session_id: ID de la sesión
         mensaje: Mensaje clasificado
         clasificacion: Clasificación asignada
-        confianza: Nivel de confianza (0.0-1.0)
         modelo_usado: Modelo LLM usado
-        tipo_usuario: Tipo de usuario
         tiempo_ms: Tiempo de procesamiento en ms
-        hubo_fallback: Si se usó fallback
-        razon_fallback: Razón del fallback
+        herramientas_seleccionadas: Lista de herramientas seleccionadas
     """
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO clasificaciones_llm (
-                        user_phone,
-                        mensaje_usuario,
+                        session_id,
+                        user_id,
+                        modelo,
                         clasificacion,
-                        confianza,
-                        modelo_usado,
-                        tipo_usuario,
-                        tiempo_procesamiento_ms,
-                        hubo_fallback,
-                        razon_fallback
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        herramientas_seleccionadas,
+                        mensaje_usuario,
+                        tiempo_respuesta_ms
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """, (
-                    user_phone,
-                    mensaje[:500],  # Limitar tamaño
-                    clasificacion,
-                    confianza,
+                    session_id,
+                    user_id,
                     modelo_usado,
-                    tipo_usuario,
-                    tiempo_ms,
-                    hubo_fallback,
-                    razon_fallback
+                    clasificacion,
+                    Json(herramientas_seleccionadas or []),
+                    mensaje[:1000],  # Limitar tamaño
+                    tiempo_ms
                 ))
                 conn.commit()
         
@@ -353,16 +345,15 @@ def nodo_filtrado_inteligente(state: WhatsAppAgentState) -> Dict:
     logger.info(f"⏱️  Tiempo: {tiempo_ms}ms")
     
     # Registrar en BD
+    session_id = state.get("session_id", f"session_{user_id}")
     registrar_clasificacion_bd(
-        user_phone=user_id,
+        user_id=user_id,
+        session_id=session_id,
         mensaje=ultimo_mensaje,
         clasificacion=clasificacion,
-        confianza=confianza,
         modelo_usado=modelo_usado,
-        tipo_usuario=tipo_usuario,
         tiempo_ms=tiempo_ms,
-        hubo_fallback=hubo_fallback,
-        razon_fallback=razon_fallback
+        herramientas_seleccionadas=[]
     )
     
     logger.info("✅ Filtrado inteligente completado\n")

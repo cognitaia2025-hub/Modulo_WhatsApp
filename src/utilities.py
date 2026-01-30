@@ -4,6 +4,7 @@ from googleapiclient.discovery import build
 from dateutil import parser, tz
 from datetime import datetime
 import pendulum
+import os
 from pydantic import BaseModel, Field
 from typing import Any, Dict, List, Optional, Type
 
@@ -17,16 +18,63 @@ SCOPES = ["https://www.googleapis.com/auth/calendar"]
 #Test Calender ID (LangGraph Calendar)
 CALENDAR_ID = "92d85be088b1ee5c2c47b2bd38ad8631fe555ca46d2566f56089e8d17ed9de5d@group.calendar.google.com"
 
-# create credential using service account
-credentials = service_account.Credentials.from_service_account_file(
-    SERVICE_ACCOUNT_FILE,scopes = SCOPES
-)
+# Inicialización lazy de credenciales de Google Calendar
+_credentials = None
+_api_resource = None
+_toolkit = None
 
-# build teh api resource manually
-api_resource = build('calendar', 'v3', credentials=credentials)
 
-# initialize the toolkit with the api_resource
-toolkit = CalendarToolkit(api_resource=api_resource)
+def _is_credentials_file_valid() -> bool:
+    """Verifica si el archivo de credenciales existe y no está vacío."""
+    return os.path.exists(SERVICE_ACCOUNT_FILE) and os.path.getsize(SERVICE_ACCOUNT_FILE) > 10
+
+
+def get_credentials():
+    """Obtiene las credenciales de Google Calendar de forma lazy."""
+    global _credentials
+    if _credentials is None:
+        if not _is_credentials_file_valid():
+            raise ValueError(
+                f"Archivo de credenciales '{SERVICE_ACCOUNT_FILE}' no existe o está vacío. "
+                "Por favor, proporcione un archivo de credenciales válido."
+            )
+        _credentials = service_account.Credentials.from_service_account_file(
+            SERVICE_ACCOUNT_FILE, scopes=SCOPES
+        )
+    return _credentials
+
+
+def get_api_resource():
+    """Obtiene el recurso de API de Google Calendar de forma lazy."""
+    global _api_resource
+    if _api_resource is None:
+        _api_resource = build('calendar', 'v3', credentials=get_credentials())
+    return _api_resource
+
+
+def get_toolkit():
+    """Obtiene el toolkit de Google Calendar de forma lazy."""
+    global _toolkit
+    if _toolkit is None:
+        _toolkit = CalendarToolkit(api_resource=get_api_resource())
+    return _toolkit
+
+
+# Mantener compatibilidad con código existente que usa estas variables directamente
+# Solo se inicializan si el archivo de credenciales es válido
+if _is_credentials_file_valid():
+    try:
+        credentials = get_credentials()
+        api_resource = get_api_resource()
+        toolkit = get_toolkit()
+    except Exception:
+        credentials = None
+        api_resource = None
+        toolkit = None
+else:
+    credentials = None
+    api_resource = None
+    toolkit = None
 
 
 class GoogleCalendarBaseTool:

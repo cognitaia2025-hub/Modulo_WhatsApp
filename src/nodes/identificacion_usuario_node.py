@@ -241,20 +241,31 @@ def nodo_identificacion_usuario(state: WhatsAppAgentState) -> WhatsAppAgentState
     """
     logger.info("👤 [0] NODO_IDENTIFICACION - Identificando usuario")
     
-    # 1. Extraer número de teléfono del último mensaje
-    ultimo_mensaje = state.get("messages", [])[-1] if state.get("messages") else None
+    # 1. Extraer número de teléfono - Prioridad:
+    #    a) user_id ya definido en el estado (para tests y contextos donde ya se conoce)
+    #    b) Metadata del mensaje WhatsApp
+    #    c) Contenido del mensaje
     
-    if not ultimo_mensaje:
-        logger.error("❌ No hay mensajes para procesar")
-        return state
+    phone_number = None
     
-    # Extraer número (en producción vendría de WhatsApp metadata)
-    phone_number = extraer_numero_telefono(
-        ultimo_mensaje.content if hasattr(ultimo_mensaje, 'content') else str(ultimo_mensaje),
-        getattr(ultimo_mensaje, 'metadata', None)
-    )
-    
-    logger.info(f"    📱 Número detectado: {phone_number}")
+    # Prioridad 1: user_id ya en el estado
+    if state.get("user_id") and state["user_id"].startswith("+"):
+        phone_number = state["user_id"]
+        logger.info(f"    📱 Usando user_id del estado: {phone_number}")
+    else:
+        # Prioridad 2 y 3: Extraer del mensaje
+        ultimo_mensaje = state.get("messages", [])[-1] if state.get("messages") else None
+        
+        if not ultimo_mensaje:
+            logger.error("❌ No hay mensajes para procesar")
+            return state
+        
+        # Extraer número (en producción vendría de WhatsApp metadata)
+        phone_number = extraer_numero_telefono(
+            ultimo_mensaje.content if hasattr(ultimo_mensaje, 'content') else str(ultimo_mensaje),
+            getattr(ultimo_mensaje, 'metadata', None)
+        )
+        logger.info(f"    📱 Número detectado: {phone_number}")
     
     # 2. Consultar si usuario existe en BD
     usuario_existente = consultar_usuario_bd(phone_number)

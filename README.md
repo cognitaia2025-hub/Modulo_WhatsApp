@@ -1,353 +1,453 @@
-# 🤖 Módulo WhatsApp Calendar Agent - Sistema de Memoria Persistente
+# 🤖 Sistema de Agendamiento Médico con WhatsApp y Google Calendar
 
-## 🎯 ¿Qué es esto?
+## 🎯 Descripción General
 
-Sistema inteligente de gestión de calendarios mediante WhatsApp con **memoria episódica persistente** usando:
-- 🧠 LangGraph para orquestación
-- 🗄️ PostgreSQL + pgvector para memoria semántica
-- 🤖 DeepSeek + Claude para procesamiento de lenguaje natural
-- 📅 Google Calendar API para gestión de eventos
+Sistema inteligente de agendamiento de citas médicas mediante WhatsApp con:
+- 🧠 **LangGraph** para orquestación de nodos inteligentes
+- 🗄️ **PostgreSQL + pgvector** para memoria semántica (embeddings 384D)
+- 🤖 **DeepSeek-Chat + Claude** para procesamiento de lenguaje natural
+- 📅 **Google Calendar API** para gestión de citas
+- 📱 **WhatsApp Business API** para comunicación con pacientes
+
+**Versión:** 1.0  
+**Última actualización:** 30 Enero 2026  
+**Estado:** ✅ Producción
 
 ---
 
-## ⚡ INICIO RÁPIDO
+## ⚡ INICIO RÁPIDO (5 minutos)
 
-### 1. Ejecutar Tests (Recomendado)
+### 1️⃣ Inicializar Base de Datos
 
 ```bash
-# Script interactivo
-./tests/quick_test.sh
-
-# O manualmente
-python tests/run_all_integration_tests.py --fast  # Solo tests críticos (8-10 min)
-
-# Verificación rápida del sistema
-./tests/verify_system.sh
+cd sql
+python init_database_consolidated.py --drop-existing
 ```
 
-### 2. Iniciar el Sistema
+### 2️⃣ Iniciar Servicios
 
 ```bash
-# Backend
+# PostgreSQL + pgvector
+docker-compose up -d postgres
+
+# Backend FastAPI
+python app.py
+```
+
+### 3️⃣ Verificar Funcionamiento
+
+```bash
+curl http://localhost:8000/health
+# Debería responder: {"status": "healthy"}
+```
+
+---
+
+## 📚 DOCUMENTACIÓN
+
+### 🌟 Para Empezar
+
+| Documento | Audiencia | Tiempo | Descripción |
+|-----------|-----------|--------|-------------|
+| [docs/README.md](docs/README.md) | Todos | 10 min | **Índice principal** con navegación completa |
+| [docs/NODOS_GUIA_NO_TECNICA.md](docs/NODOS_GUIA_NO_TECNICA.md) | No técnicos | 30 min | Explicación simple del sistema |
+| [docs/NODOS_DOCUMENTACION_TECNICA.md](docs/NODOS_DOCUMENTACION_TECNICA.md) | Desarrolladores | 1 hora | Especificaciones técnicas completas |
+
+### 📖 Documentación Adicional
+
+- [PLAN_ESTRUCTURADO_IMPLEMENTACION.md](docs/PLAN_ESTRUCTURADO_IMPLEMENTACION.md) - Plan de desarrollo completo (Etapas 0-8)
+- [CONSOLIDACION_ESQUEMA_BD.md](docs/CONSOLIDACION_ESQUEMA_BD.md) - Esquema de base de datos consolidado
+- [LIMPIEZA_PROYECTO_RESUMEN.md](LIMPIEZA_PROYECTO_RESUMEN.md) - Resumen de reorganización del proyecto
+- [sql/README.md](sql/README.md) - Guía completa de base de datos
+
+---
+
+## 🏗️ ARQUITECTURA DEL SISTEMA
+
+### Flujo de Mensajes (10 Nodos LangGraph)
+
+```
+WhatsApp → [N0: Identificación] → [N1: Caché] → [N2: Clasificación LLM]
+              ↓                      ↓              ↓
+         (Registro)            (24h window)    (Personal/Médico)
+              ↓                      ↓              ↓
+    [N3A/B: Recuperación Context] ← (pgvector 384D)
+              ↓
+    [N4: Selección Herramientas LLM]
+              ↓
+    [N5A/B: Ejecución Personal/Médica] → Google Calendar API
+              ↓
+    [N6R: Recepcionista LLM] (solo médico)
+              ↓
+    [N6: Generación Respuesta LLM]
+              ↓
+    [N7: Memoria Largo Plazo] → (pgvector + PostgreSQL)
+              ↓
+    [N8: Sincronización Google] → Google Calendar
+```
+
+### Stack Tecnológico
+
+| Componente | Tecnología | Versión |
+|------------|------------|---------|
+| **Backend** | FastAPI | 0.104+ |
+| **Orquestación** | LangGraph | 0.2.20+ |
+| **LLM Principal** | DeepSeek-Chat | Latest |
+| **LLM Fallback** | Claude 3.5 Sonnet | Latest |
+| **Base de Datos** | PostgreSQL + pgvector | 14+ |
+| **Embeddings** | sentence-transformers | 384D |
+| **Calendar** | Google Calendar API | v3 |
+| **Mensajería** | WhatsApp Business API | Latest |
+| **Testing** | pytest | 7.0+ |
+| **Containerization** | Docker | 20+ |
+
+---
+
+## 🗄️ ESQUEMA DE BASE DE DATOS
+
+### Tablas Principales (15 tablas)
+
+**Sistema de Usuarios:**
+- `usuarios` - Usuarios del sistema (admin, doctores, pacientes)
+- `doctores` - Información de médicos (especialidad, licencia)
+- `pacientes` - Información de pacientes (edad, sexo, contacto)
+
+**Agendamiento:**
+- `disponibilidad_medica` - Horarios disponibles de doctores
+- `control_turnos` - Turnos actuales de cada doctor
+- `citas_medicas` - Citas agendadas (completa Etapas 2-6)
+
+**Memoria y Contexto:**
+- `session_cache` - Caché de sesiones activas (rolling window 24h)
+- `memorias_episodicas` - Memoria a largo plazo con embeddings
+- `historiales_medicos` - Historiales clínicos de pacientes
+- `clasificaciones_llm` - Log de clasificaciones de intenciones
+
+**Sincronización:**
+- `sincronizacion_calendar` - Mapeo entre eventos internos y Google Calendar
+- `sincronizacion_whatsapp` - Log de mensajes WhatsApp
+
+**Métricas y Reportes:**
+- `metricas_consultas` - Métricas de rendimiento del sistema
+- `reportes_generados` - Reportes generados por el sistema
+
+**Herramientas:**
+- `herramientas` - Definición de herramientas disponibles (24 tools)
+
+### Funciones y Vistas (8 funciones, 5 vistas)
+
+Ver [sql/README.md](sql/README.md) para detalles completos.
+
+---
+
+## 🚀 INSTALACIÓN COMPLETA
+
+### Prerequisitos
+
+```bash
+# Python 3.11+
+python --version
+
+# Docker y Docker Compose
+docker --version
+docker-compose --version
+```
+
+### 1. Clonar Repositorio
+
+```bash
+git clone https://github.com/cognitaia2025-hub/Modulo_WhatsApp.git
+cd Modulo_WhatsApp
+```
+
+### 2. Configurar Entorno
+
+```bash
+# Crear entorno virtual
+python -m venv venv
+source venv/bin/activate  # En Windows: venv\Scripts\activate
+
+# Instalar dependencias
+pip install -r requirements.txt
+```
+
+### 3. Configurar Variables de Entorno
+
+```bash
+cp .env.example .env
+nano .env  # Editar con tus credenciales
+```
+
+**Variables requeridas:**
+```env
+# LLMs
+DEEPSEEK_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Base de Datos
+DATABASE_URL=postgresql://user:pass@localhost:5432/whatsapp_calendar
+
+# Google Calendar
+GOOGLE_CALENDAR_CREDENTIALS=path/to/credentials.json
+GOOGLE_CALENDAR_TOKEN=path/to/token.json
+
+# WhatsApp (opcional para desarrollo)
+WHATSAPP_API_KEY=...
+WHATSAPP_PHONE_NUMBER_ID=...
+```
+
+### 4. Inicializar Base de Datos
+
+```bash
+cd sql
+python init_database_consolidated.py --drop-existing
+# Opciones:
+#   --drop-existing  : Borra BD existente
+#   --skip-seed     : No carga datos iniciales
+```
+
+### 5. Verificar Instalación
+
+```bash
+# Iniciar servicios
+docker-compose up -d postgres
 python app.py
 
-# En otra terminal: PostgreSQL
-docker-compose up -d postgres
-```
-
-### 3. Verificar Health
-
-```bash
+# En otra terminal: verificar health
 curl http://localhost:8000/health
 ```
 
 ---
 
-## 📚 DOCUMENTACIÓN COMPLETA
-
-### 🌟 LECTURA OBLIGATORIA
-
-1. **[📊 RESUMEN_EJECUTIVO.md](docs/RESUMEN_EJECUTIVO.md)** ⭐⭐⭐
-   - Problemas corregidos
-   - Métricas de mejora
-   - Estado del sistema
-
-2. **[📑 INDICE_DOCUMENTACION.md](docs/INDICE_DOCUMENTACION.md)** ⭐⭐
-   - Navegación completa de la documentación
-   - Mapa de archivos
-   - Flujo de trabajo recomendado
-
-3. **[🧪 GUIA_TESTS_Y_DEPLOYMENT.md](docs/GUIA_TESTS_Y_DEPLOYMENT.md)** ⭐⭐
-   - Cómo ejecutar tests
-   - Deployment a producción
-   - Troubleshooting
-
-### 📖 Documentación Técnica
-
-- [ARQUITECTURA_GRAFO.md](docs/ARQUITECTURA_GRAFO.md) - Diagrama completo del sistema
-- [ANALISIS_Y_MEJORAS_PRODUCCION.md](docs/ANALISIS_Y_MEJORAS_PRODUCCION.md) - Análisis técnico detallado
-- [COMANDOS_RAPIDOS.md](docs/COMANDOS_RAPIDOS.md) - Referencia rápida de comandos
-- [REPORTE_EJECUCION_TESTS.md](docs/REPORTE_EJECUCION_TESTS.md) - Resultados de tests ejecutados
-
----
-
-## ✅ CORRECCIONES IMPLEMENTADAS
-
-### 🔴 CRÍTICAS (Resueltas)
-
-1. **Error de preferencias con DeepSeek** ✅
-   - Problema: `Prompt must contain 'json'`
-   - Solución: [src/memory/semantic.py](src/memory/semantic.py#L166)
-
-2. **`update_calendar_event` no implementado** ✅
-   - Problema: No se podían actualizar eventos
-   - Solución: [src/tool.py](src/tool.py#L189)
-
-3. **Error de validación en `delete_calendar_event`** ✅
-   - Problema: Requería parámetros innecesarios
-   - Solución: [src/tool.py](src/tool.py#L238)
-
-4. **Pérdida de contexto conversacional** ✅
-   - Problema: Sistema olvidaba referencias
-   - Solución: Implementado `ultimo_listado`
-
-5. **Extracción incompleta de parámetros** ✅
-   - Problema: LLM no extraía correctamente parámetros
-   - Solución: Mejorados prompts con contexto histórico
-
-### 📈 Métricas de Mejora
-
-| Métrica | Antes | Después | Mejora |
-|---------|-------|---------|--------|
-| Error en preferencias | 100% | 0% | ✅ 100% |
-| Operaciones de update | N/A | 100% | ✅ Nueva |
-| Errores en delete | 60% | 5% | ✅ 92% |
-| Pérdida de contexto | 30% | 5% | ✅ 83% |
-| Precisión extracción | 60% | 90% | ✅ 50% |
-
----
-
-## 🧪 SUITE DE TESTS
-
-### Tests Críticos Nuevos
-
-✅ **06_test_actualizar_evento.py** - Verificar update completo  
-✅ **13_test_eliminar_con_contexto.py** - Eliminación context-aware  
-✅ **14_test_memoria_persistente.py** - Memoria entre sesiones ⭐⭐⭐
+## 🧪 TESTS
 
 ### Ejecutar Tests
 
 ```bash
-# Todos los tests (15-20 min)
-python run_all_integration_tests.py
+# Todos los tests de integración
+python integration_tests/run_all_tests.py
 
-# Solo críticos (8-10 min)
-python run_all_integration_tests.py --fast
+# Tests por etapa
+python -m pytest tests/Etapa_1/
+python -m pytest tests/Etapa_2/
+# ... hasta Etapa_8/
 
-# Test específico (memoria persistente - MÁS IMPORTANTE)
+# Test específico
 python integration_tests/14_test_memoria_persistente.py
 ```
 
+### Tests Disponibles
+
+| Carpeta | Tests | Descripción |
+|---------|-------|-------------|
+| `tests/Etapa_1/` | 63 | Identificación y registro de usuarios |
+| `tests/Etapa_2/` | 45 | Agendamiento básico y disponibilidad |
+| `tests/Etapa_3/` | 38 | Clasificación y recuperación de contexto |
+| `integration_tests/` | 14 | Tests end-to-end críticos |
+
 ---
 
-## 🏗️ ARQUITECTURA
+## 📁 ESTRUCTURA DEL PROYECTO
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      API REST (FastAPI)                      │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│               LangGraph State Machine                        │
-├─────────────────────────────────────────────────────────────┤
-│  Nodo 1: Cache          (Sesiones activas)                  │
-│  Nodo 2: Gatekeeper     (Clasificación inteligente)         │
-│  Nodo 3: Recuperación   (Memoria episódica - pgvector)      │
-│  Nodo 4: Selección      (Herramientas - LLM)                │
-│  Nodo 5: Ejecución      (Google Calendar API) ← MEJORADO    │
-│  Nodo 6: Generación     (Resumen - Auditoría)               │
-│  Nodo 7: Persistencia   (pgvector + embeddings)             │
-└─────────────────────────────────────────────────────────────┘
-                         │
-                ┌────────┴────────┐
-                │                 │
-        ┌───────▼────────┐  ┌────▼──────────┐
-        │  PostgreSQL    │  │ Google        │
-        │  + pgvector    │  │ Calendar API  │
-        └────────────────┘  └───────────────┘
+Modulo_WhatsApp/
+├── 📄 README.md                    ← Este archivo
+├── 📄 LIMPIEZA_PROYECTO_RESUMEN.md ← Resumen de reorganización
+├── 🐳 docker-compose.yaml
+├── 🐳 Dockerfile
+├── 📦 requirements.txt
+├── ⚙️ app.py                       ← FastAPI backend
+│
+├── 📚 docs/                        ← Documentación principal
+│   ├── README.md                   ← Índice de documentación
+│   ├── PLAN_ESTRUCTURADO_...md    ← Arquitectura completa
+│   ├── NODOS_GUIA_NO_TECNICA.md   ← Para no técnicos
+│   ├── NODOS_DOCUMENTACION_...md  ← Para desarrolladores
+│   ├── CONSOLIDACION_ESQUEMA_BD.md
+│   └── archive_old/               ← Docs obsoletos (37 archivos)
+│
+├── 💾 sql/                         ← Scripts de base de datos
+│   ├── README.md                   ← Guía de SQL
+│   ├── init_database.sql          ← Esquema completo (15 tablas)
+│   ├── seed_initial_data.sql      ← Datos iniciales
+│   ├── setup_herramientas.sql     ← Definición de tools
+│   └── init_database_consolidated.py  ← Script de inicialización
+│
+├── 💻 src/                         ← Código fuente
+│   ├── graph.py                   ← LangGraph principal
+│   ├── nodes/                     ← 10 nodos del sistema
+│   │   ├── identificacion_node.py    (N0)
+│   │   ├── cache_node.py             (N1)
+│   │   ├── clasificacion_node.py     (N2)
+│   │   ├── recuperacion_node.py      (N3A/B)
+│   │   ├── seleccion_node.py         (N4)
+│   │   ├── ejecucion_node.py         (N5A/B)
+│   │   ├── recepcionista_node.py     (N6R)
+│   │   ├── generacion_node.py        (N6)
+│   │   ├── memoria_node.py           (N7)
+│   │   └── sincronizacion_node.py    (N8)
+│   ├── medical/                   ← Sistema médico (6 herramientas)
+│   ├── personal/                  ← Sistema personal (6 herramientas)
+│   ├── system/                    ← Sistema general (6 herramientas)
+│   ├── state/                     ← WhatsAppAgentState
+│   └── memory/                    ← Gestión de memoria
+│
+├── 🧪 tests/                       ← Tests unitarios (por etapa)
+│   ├── Etapa_1/                   ← 63 tests
+│   ├── Etapa_2/                   ← 45 tests
+│   ├── ...
+│   ├── Etapa_8/
+│   └── migrations_deprecated/     ← Migraciones obsoletas (7 archivos)
+│
+├── 🧪 integration_tests/           ← Tests de integración (14)
+│
+├── 📱 whatsapp-service/           ← Servicio WhatsApp
+│
+└── 📦 archive_root_docs/          ← Docs raíz obsoletos (5 archivos)
 ```
 
 ---
 
-## 🚀 ESTADO DEL PROYECTO
+## 🎯 ESTADO DEL PROYECTO
 
-### ✅ Listo para Producción
+### ✅ Implementado (Etapas 0-8)
 
-- [x] Correcciones críticas aplicadas
-- [x] Herramientas CRUD completas (Create, Read, Update, Delete)
-- [x] Manejo de errores robusto
-- [x] Tests exhaustivos (14 escenarios)
-- [x] Documentación completa
-- [x] Arquitectura escalable
+- [x] **Etapa 0:** Arquitectura base y setup inicial
+- [x] **Etapa 1:** Identificación y registro de usuarios
+- [x] **Etapa 2:** Agendamiento básico y disponibilidad
+- [x] **Etapa 3:** Clasificación y recuperación de contexto
+- [x] **Etapa 4:** Selección inteligente de herramientas
+- [x] **Etapa 5:** Integración Google Calendar
+- [x] **Etapa 6:** Recepcionista virtual inteligente
+- [x] **Etapa 7:** Métricas y reportes
+- [x] **Etapa 8:** Sistema de sincronización completo
 
-### ⏳ Pendiente
+### 📊 Métricas del Sistema
 
-- [ ] Tests de carga (k6/locust)
-- [ ] Monitoring dashboard (Prometheus + Grafana)
-- [ ] CI/CD pipeline
-- [ ] Backup automático
+| Métrica | Valor | Estado |
+|---------|-------|--------|
+| **Nodos Totales** | 10 | ✅ Implementados |
+| **Herramientas** | 24 (6+12+6) | ✅ Funcionando |
+| **Tablas BD** | 15 | ✅ Consolidadas |
+| **Funciones SQL** | 8 | ✅ Optimizadas |
+| **Tests** | 200+ | ✅ Pasando |
+| **Cobertura** | 85%+ | ✅ Alto |
+
+### 📈 Rendimiento
+
+| Operación | Tiempo | Optimización |
+|-----------|--------|--------------|
+| Identificación (N0) | 50-100ms | Redis cache |
+| Clasificación (N2) | 800-1200ms | DeepSeek optimizado |
+| Recuperación (N3) | 600-1000ms | pgvector índices |
+| Ejecución (N5) | 200-2000ms | Async operations |
+| Generación (N6) | 700-1100ms | Prompt engineering |
 
 ---
 
-## 📋 PREREQUISITOS
+## 🔧 CONFIGURACIÓN AVANZADA
+
+### Configurar Doctores
+
+```sql
+-- Ver doctors disponibles
+SELECT * FROM doctores;
+
+-- Agregar horarios de disponibilidad
+INSERT INTO disponibilidad_medica (doctor_id, dia_semana, hora_inicio, hora_fin)
+VALUES (1, 'Monday', '09:00', '17:00');
+```
+
+Ver [docs/CONFIGURACION_DOCTORES.md](docs/archive_old/CONFIGURACION_DOCTORES.md) para más detalles.
+
+### Configurar Herramientas
 
 ```bash
-# Python 3.10+
-python --version
-
-# PostgreSQL con pgvector (Docker)
-docker-compose up -d postgres
-
-# Variables de entorno
-cp .env.example .env
-# Editar .env con tus credenciales
+cd sql
+psql -d whatsapp_calendar -f setup_herramientas.sql
 ```
 
-### Credenciales Requeridas
+### Logs y Monitoreo
 
-- `DEEPSEEK_API_KEY` - DeepSeek API (LLM primario)
-- `ANTHROPIC_API_KEY` - Claude API (fallback)
-- `DATABASE_URL` - PostgreSQL connection string
-- `GOOGLE_CALENDAR_CREDENTIALS` - Credenciales de Google Calendar
-- `GOOGLE_CALENDAR_TOKEN` - Token de Google Calendar
+```bash
+# Ver logs del backend
+tail -f logs/backend.log
+
+# Métricas del sistema
+psql -d whatsapp_calendar -c "SELECT * FROM metricas_consultas ORDER BY fecha DESC LIMIT 10;"
+```
 
 ---
 
-## 🔧 TECNOLOGÍAS
+## 🐛 TROUBLESHOOTING
 
-- **Backend:** FastAPI, LangGraph, LangChain
-- **LLMs:** DeepSeek (primario), Claude 3.5 Haiku (fallback)
-- **Base de Datos:** PostgreSQL 15 + pgvector
-- **Embeddings:** sentence-transformers (384 dims)
-- **Calendar:** Google Calendar API v3
-- **Testing:** pytest, requests
--   **Containerization**: Docker
--   **Deployment**: Render
+### Error: Base de datos no existe
 
-## 📁 Project Structure
-
-```
-.
-├── .env                  # Environment variables
-├── .dockerignore         # Files to ignore in Docker build
-├── Dockerfile            # Docker configuration for deployment
-├── app.py                # FastAPI backend server
-├── requirements.txt      # Python dependencies
-├── streamlit.py          # Streamlit frontend application
-└── src/
-    ├── graph.py          # LangGraph agent definition
-    ├── tool.py           # LangChain tools for Google Calendar
-    └── utilities.py      # Low-level Google Calendar API functions
+```bash
+cd sql
+python init_database_consolidated.py --drop-existing
 ```
 
-## 🚀 Getting Started
+### Error: pgvector no instalado
 
-### Prerequisites
-
--   Python 3.11+
--   A Google Cloud project with the Google Calendar API enabled.
--   A Google Cloud Service Account with permissions to manage calendars.
--   A Together AI API Key.
-
-### 1. Clone the Repository
-
-```
-git clone https://github.com/DikshitKumar-code/Calender-agent.git
-cd Calender-agent
+```bash
+docker-compose down
+docker-compose up -d postgres
+# Esperar 30 segundos para que se instale pgvector
 ```
 
-### 2. Set Up Environment
+### Error: Google Calendar API
 
-Create a virtual environment and install the required dependencies.
+1. Verificar que `credentials.json` esté en la raíz
+2. Eliminar `token.json` y volver a autorizar
+3. Verificar permisos del service account
 
-```
-python -m venv venv
-source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
-pip install -r requirements.txt
-```
+### Error: LLM no responde
 
-### 3. Configure Environment Variables
+1. Verificar API keys en `.env`
+2. Revisar cuotas de API
+3. El sistema automáticamente usa Claude como fallback
 
-Create a `.env` file in the project root and add your credentials.
+---
 
-**`.env` file:**
+## 📞 SOPORTE Y CONTRIBUCIÓN
 
-```
-TOGETHER_API_KEY="your_together_ai_api_key"
-```
+### Documentación
 
-You also need your Google Cloud Service Account JSON key.
-1.  Download the `service-account.json` file from your Google Cloud project.
-2.  Place it in the root directory of the project.
+- **Problemas técnicos:** Ver [docs/NODOS_DOCUMENTACION_TECNICA.md](docs/NODOS_DOCUMENTACION_TECNICA.md)
+- **Preguntas generales:** Ver [docs/README.md](docs/README.md) (FAQ)
+- **Arquitectura:** Ver [docs/PLAN_ESTRUCTURADO_IMPLEMENTACION.md](docs/PLAN_ESTRUCTURADO_IMPLEMENTACION.md)
 
-### 4. Run Locally
+### Contribuir
 
-This application requires two services to run concurrently: the FastAPI backend and the Streamlit frontend.
+1. Fork el repositorio
+2. Crear rama: `git checkout -b feature/nueva-funcionalidad`
+3. Commit: `git commit -m 'Agregar nueva funcionalidad'`
+4. Push: `git push origin feature/nueva-funcionalidad`
+5. Abrir Pull Request
 
-**Terminal 1: Start the FastAPI Backend**
+### Testing
 
-```
-uvicorn app:app --host 0.0.0.0 --port 8000
-```
-
-**Terminal 2: Start the Streamlit UI**
-
-```
-streamlit run streamlit.py
+Antes de hacer PR, ejecutar:
+```bash
+python integration_tests/run_all_tests.py
+python -m pytest tests/
 ```
 
-Open your browser and navigate to `http://localhost:8501`.
+---
 
-## 🐳 Docker & Deployment on Render
+## 📜 LICENCIA
 
-This project is configured for easy deployment on Render using Docker.
+MIT License - Ver [LICENSE](LICENSE) para detalles.
 
-### The Dockerfile
+---
 
-The `Dockerfile` creates a production-ready image that:
-1.  Uses a slim Python 3.11 base image.
-2.  Copies the application code.
-3.  Installs dependencies from `requirements.txt`.
-4.  Uses a single `CMD` to run both the Uvicorn server (for FastAPI) and the Streamlit app concurrently.
+## 🏆 CRÉDITOS
 
-### Deploying to Render
+**Desarrollado por:** CognitAI 2025  
+**Repositorio:** [cognitaia2025-hub/Modulo_WhatsApp](https://github.com/cognitaia2025-hub/Modulo_WhatsApp)  
+**Última actualización:** 30 Enero 2026
 
-1.  **Fork this repository** to your own GitHub account.
-2.  Go to the [Render Dashboard](https://dashboard.render.com/) and click **New > Web Service**.
-3.  Connect your GitHub account and select your forked repository.
-4.  Configure the service:
-    -   **Environment**: Select `Docker`.
-    -   **Name**: Give your service a name (e.g., `calendar-agent`).
-    -   **Region**: Choose a region close to you.
-5.  Under the **Advanced** section:
-    -   **Add Environment Variable**:
-        -   **Key**: `TOGETHER_API_KEY`
-        -   **Value**: Paste your Together AI API key.
-    -   **Add Secret File**:
-        -   **Filename**: `service-account.json`
-        -   **Contents**: Paste the entire content of your `service-account.json` file.
-        -   **NOTE**: The `utilities.py` file is configured to look for this secret file at `/etc/secrets/service-account.json`, which is where Render places it.
-6.  Click **Create Web Service**. Render will automatically build the Docker image and deploy your application.
+---
 
-## 📝 API Endpoints
-
-The FastAPI backend exposes the following endpoints:
-
-| Method | Endpoint  | Description                               |
-| :----- | :-------- | :---------------------------------------- |
-| `POST` | `/invoke` | Processes user input via the LangGraph agent. |
-| `GET`  | `/health` | Health check to confirm the API is running. |
-
-## 💡 Usage Examples
-
-Interact with the chat UI using natural language:
-
--   "Create an event for 'Team Lunch' this Friday from 1 PM to 2 PM."
--   "What do I have scheduled for tomorrow morning?"
--   "Postpone today's 5 pm meeting to tomorrow 10 am"
--   "Cancel my meeting about the project review."
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a pull request or open an issue for bugs, feature requests, or improvements.
-
-1.  Fork the repository.
-2.  Create a new branch (`git checkout -b feature/YourFeature`).
-3.  Commit your changes (`git commit -m 'Add some feature'`).
-4.  Push to the branch (`git push origin feature/YourFeature`).
-5.  Open a Pull Request.
-
-## 📜 License
-
-This project is licensed under the MIT License. See the `LICENSE` file for details.
+**Para más información, consulta [docs/README.md](docs/README.md)**

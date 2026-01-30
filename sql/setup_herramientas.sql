@@ -5,7 +5,7 @@
 -- Crear tabla si no existe
 CREATE TABLE IF NOT EXISTS herramientas_disponibles (
     id SERIAL PRIMARY KEY,
-    id_tool VARCHAR(100) UNIQUE NOT NULL,
+    tool_name VARCHAR(100) UNIQUE NOT NULL,
     description TEXT NOT NULL,
     activa BOOLEAN DEFAULT TRUE,
     metadata JSONB,
@@ -20,7 +20,7 @@ WHERE activa = TRUE;
 
 -- Insertar herramientas de Google Calendar
 -- (Si ya existen, actualizarlas)
-INSERT INTO herramientas_disponibles (id_tool, description, activa, metadata)
+INSERT INTO herramientas_disponibles (tool_name, description, activa, metadata)
 VALUES
     ('create_calendar_event', 
      'Crear nuevos eventos con título, fecha y hora.', 
@@ -47,7 +47,7 @@ VALUES
      TRUE,
      '{"category": "query", "requires_params": ["keyword"]}'::jsonb
     )
-ON CONFLICT (id_tool) 
+ON CONFLICT (tool_name) 
 DO UPDATE SET
     description = EXCLUDED.description,
     activa = EXCLUDED.activa,
@@ -55,12 +55,14 @@ DO UPDATE SET
     updated_at = NOW();
 
 -- Verificar inserción
-SELECT id_tool, description, activa 
+SELECT tool_name, description, activa 
 FROM herramientas_disponibles 
-ORDER BY id_tool;
+ORDER BY tool_name;
 
 -- Comentarios:
 -- 1. La tabla usa JSONB para metadata flexible
 -- 2. El campo 'activa' permite deshabilitar herramientas sin borrarlas
 -- 3. El índice optimiza consultas de herramientas activas
 -- 4. ON CONFLICT permite ejecutar el script múltiples veces sin errores
+-- 5. tool_name es UNIQUE y NOT NULL para identificación consistente
+

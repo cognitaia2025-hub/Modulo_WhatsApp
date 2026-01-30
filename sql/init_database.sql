@@ -188,7 +188,460 @@ COMMENT ON VIEW auditoria_para_limpiar IS
 
 
 -- =====================================================================
--- 5. TABLAS INTERNAS DE LANGGRAPH (Checkpoint Automático)
+-- 5. SISTEMA DE USUARIOS Y DOCTORES (ETAPA 1)
+-- =====================================================================
+-- Tabla principal de usuarios con soporte multi-rol
+
+CREATE TABLE IF NOT EXISTS usuarios (
+    id SERIAL PRIMARY KEY,
+    phone_number VARCHAR(50) UNIQUE NOT NULL,
+    display_name VARCHAR(200),
+    es_admin BOOLEAN DEFAULT FALSE,
+    timezone VARCHAR(50) DEFAULT 'America/Tijuana',
+    preferencias JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    email VARCHAR UNIQUE,
+    is_active BOOLEAN DEFAULT TRUE,
+    tipo_usuario VARCHAR DEFAULT 'paciente_externo' 
+        CHECK (tipo_usuario IN ('personal', 'doctor', 'paciente_externo', 'admin'))
+);
+
+-- Índices para búsquedas rápidas
+CREATE INDEX IF NOT EXISTS idx_usuarios_tipo ON usuarios(tipo_usuario);
+CREATE INDEX IF NOT EXISTS idx_usuarios_phone ON usuarios(phone_number);
+CREATE INDEX IF NOT EXISTS idx_usuarios_email ON usuarios(email) WHERE email IS NOT NULL;
+
+COMMENT ON TABLE usuarios IS 
+'Tabla principal de usuarios multi-rol con soporte para personal, doctores, pacientes y admin';
+
+-- Tabla de doctores (perfil especializado)
+CREATE TABLE IF NOT EXISTS doctores (
+    id SERIAL PRIMARY KEY,
+    phone_number VARCHAR(50) REFERENCES usuarios(phone_number),
+    nombre_completo VARCHAR(200) NOT NULL,
+    especialidad VARCHAR(100) NOT NULL,
+    num_licencia VARCHAR(50) UNIQUE,
+    horario_atencion JSONB DEFAULT '{}'::jsonb,
+    direccion_consultorio VARCHAR(300),
+    tarifa_consulta DECIMAL(10,2),
+    años_experiencia INTEGER DEFAULT 0,
+    orden_turno INTEGER DEFAULT 1,
+    total_citas_asignadas INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_doctores_phone ON doctores(phone_number);
+
+COMMENT ON TABLE doctores IS 
+'Perfiles especializados de médicos con información profesional';
+
+-- Tabla de pacientes (perfil especializado)
+CREATE TABLE IF NOT EXISTS pacientes (
+    id SERIAL PRIMARY KEY,
+    doctor_id INTEGER REFERENCES doctores(id),
+    nombre_completo VARCHAR(200) NOT NULL,
+    telefono VARCHAR(50) UNIQUE,
+    email VARCHAR(100),
+    fecha_nacimiento DATE,
+    genero VARCHAR(20) CHECK (genero IN ('masculino', 'femenino', 'otro')),
+    direccion TEXT,
+    contacto_emergencia JSONB DEFAULT '{}'::jsonb,
+    seguro_medico VARCHAR(100),
+    numero_seguro VARCHAR(50),
+    alergias TEXT,
+    medicamentos_actuales TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    ultima_cita TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_pacientes_doctor ON pacientes(doctor_id);
+CREATE INDEX IF NOT EXISTS idx_pacientes_telefono ON pacientes(telefono);
+
+COMMENT ON TABLE pacientes IS 
+'Perfiles de pacientes con historial médico básico';
+
+
+-- =====================================================================
+-- 6. SISTEMA DE TURNOS Y DISPONIBILIDAD (ETAPA 2)
+-- =====================================================================
+-- Tabla de control de turnos entre doctores
+CREATE TABLE IF NOT EXISTS control_turnos (
+    id SERIAL PRIMARY KEY,
+    ultimo_doctor_id INTEGER REFERENCES doctores(id),
+    citas_santiago INTEGER DEFAULT 0,
+    citas_joana INTEGER DEFAULT 0,
+    total_turnos_asignados INTEGER DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Insertar registro inicial si no existe
+INSERT INTO control_turnos (ultimo_doctor_id, citas_santiago, citas_joana, total_turnos_asignados)
+SELECT NULL, 0, 0, 0
+WHERE NOT EXISTS (SELECT 1 FROM control_turnos);
+
+COMMENT ON TABLE control_turnos IS 
+'Control de alternancia de turnos entre doctores para distribución equitativa';
+
+-- Tabla de disponibilidad médica por doctor
+CREATE TABLE IF NOT EXISTS disponibilidad_medica (
+    id SERIAL PRIMARY KEY,
+    doctor_id INTEGER REFERENCES doctores(id) NOT NULL,
+    dia_semana INTEGER NOT NULL CHECK (dia_semana BETWEEN 0 AND 6),
+    hora_inicio TIME NOT NULL,
+    hora_fin TIME NOT NULL,
+    disponible BOOLEAN DEFAULT TRUE,
+    duracion_cita INTEGER DEFAULT 30,
+    max_pacientes_dia INTEGER DEFAULT 16,
+    notas VARCHAR(200),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_disponibilidad_doctor ON disponibilidad_medica(doctor_id);
+CREATE INDEX IF NOT EXISTS idx_disponibilidad_dia ON disponibilidad_medica(dia_semana);
+
+COMMENT ON TABLE disponibilidad_medica IS 
+'Horarios de atención configurables por doctor y día de la semana';
+
+
+-- =====================================================================
+-- 7. SISTEMA DE CITAS MÉDICAS (ETAPA 2-6)
+-- =====================================================================
+-- Tabla principal de citas médicas
+CREATE TABLE IF NOT EXISTS citas_medicas (
+    id SERIAL PRIMARY KEY,
+    doctor_id INTEGER REFERENCES doctores(id) NOT NULL,
+    paciente_id INTEGER REFERENCES pacientes(id) NOT NULL,
+    fecha_hora_inicio TIMESTAMP NOT NULL,
+    fecha_hora_fin TIMESTAMP NOT NULL,
+    tipo_consulta VARCHAR(20) DEFAULT 'seguimiento' 
+        CHECK (tipo_consulta IN ('primera_vez', 'seguimiento', 'urgencia', 'revision')),
+    estado VARCHAR(20) DEFAULT 'programada'
+        CHECK (estado IN ('programada', 'confirmada', 'en_curso', 'completada', 'cancelada', 'no_asistio')),
+    motivo_consulta TEXT,
+    sintomas_principales TEXT,
+    diagnostico TEXT,
+    tratamiento_prescrito JSONB DEFAULT '{}'::jsonb,
+    medicamentos JSONB DEFAULT '[]'::jsonb,
+    proxima_cita DATE,
+    notas_privadas TEXT,
+    google_event_id VARCHAR(200),
+    sincronizada_google BOOLEAN DEFAULT FALSE,
+    costo_consulta DECIMAL(10,2),
+    metodo_pago VARCHAR(20) DEFAULT 'efectivo'
+        CHECK (metodo_pago IN ('efectivo', 'tarjeta', 'transferencia', 'seguro')),
+    recordatorio_enviado BOOLEAN DEFAULT FALSE,
+    recordatorio_fecha_envio TIMESTAMP,
+    recordatorio_intentos INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Índices para citas
+CREATE INDEX IF NOT EXISTS idx_citas_doctor ON citas_medicas(doctor_id);
+CREATE INDEX IF NOT EXISTS idx_citas_paciente ON citas_medicas(paciente_id);
+CREATE INDEX IF NOT EXISTS idx_citas_fecha ON citas_medicas(fecha_hora_inicio);
+CREATE INDEX IF NOT EXISTS idx_citas_estado ON citas_medicas(estado);
+CREATE INDEX IF NOT EXISTS idx_citas_google_event ON citas_medicas(google_event_id) WHERE google_event_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_citas_recordatorios_pendientes 
+    ON citas_medicas(fecha_hora_inicio, recordatorio_enviado) 
+    WHERE recordatorio_enviado = FALSE AND estado IN ('programada', 'confirmada');
+
+COMMENT ON TABLE citas_medicas IS 
+'Registro completo de citas médicas con sincronización Google Calendar y recordatorios';
+
+
+-- =====================================================================
+-- 8. SISTEMA DE HISTORIALES MÉDICOS (ETAPA 3)
+-- =====================================================================
+-- Tabla de historiales médicos con búsqueda semántica
+CREATE TABLE IF NOT EXISTS historiales_medicos (
+    id SERIAL PRIMARY KEY,
+    paciente_id INTEGER REFERENCES pacientes(id) NOT NULL,
+    cita_id INTEGER REFERENCES citas_medicas(id),
+    fecha_consulta DATE NOT NULL,
+    peso DECIMAL(5,2),
+    altura DECIMAL(5,2),
+    presion_arterial VARCHAR(20),
+    frecuencia_cardiaca INTEGER,
+    temperatura DECIMAL(4,2),
+    diagnostico_principal TEXT NOT NULL,
+    diagnosticos_secundarios JSONB DEFAULT '[]'::jsonb,
+    sintomas TEXT,
+    exploracion_fisica TEXT,
+    estudios_laboratorio JSONB DEFAULT '{}'::jsonb,
+    tratamiento_prescrito TEXT,
+    medicamentos JSONB DEFAULT '[]'::jsonb,
+    indicaciones_generales TEXT,
+    fecha_proxima_revision DATE,
+    archivos_adjuntos JSONB DEFAULT '[]'::jsonb,
+    embedding vector(384),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Índices para historiales
+CREATE INDEX IF NOT EXISTS idx_historiales_paciente ON historiales_medicos(paciente_id);
+CREATE INDEX IF NOT EXISTS idx_historiales_fecha ON historiales_medicos(fecha_consulta DESC);
+CREATE INDEX IF NOT EXISTS idx_historiales_embedding_hnsw 
+    ON historiales_medicos 
+    USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64)
+    WHERE embedding IS NOT NULL;
+
+COMMENT ON TABLE historiales_medicos IS 
+'Historiales clínicos completos con soporte para búsqueda semántica';
+
+-- Tabla de clasificaciones de LLM (registro de decisiones)
+CREATE TABLE IF NOT EXISTS clasificaciones_llm (
+    id SERIAL PRIMARY KEY,
+    session_id VARCHAR(200) NOT NULL,
+    user_id VARCHAR(100) NOT NULL,
+    modelo VARCHAR(50) NOT NULL,
+    clasificacion VARCHAR(50) NOT NULL,
+    herramientas_seleccionadas JSONB DEFAULT '[]'::jsonb,
+    mensaje_usuario TEXT NOT NULL,
+    metadata JSONB DEFAULT '{}'::jsonb,
+    tiempo_respuesta_ms INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_clasificaciones_session ON clasificaciones_llm(session_id);
+CREATE INDEX IF NOT EXISTS idx_clasificaciones_user ON clasificaciones_llm(user_id);
+CREATE INDEX IF NOT EXISTS idx_clasificaciones_tipo ON clasificaciones_llm(clasificacion);
+
+COMMENT ON TABLE clasificaciones_llm IS 
+'Registro de clasificaciones y decisiones tomadas por el LLM para análisis';
+
+-- Vista de resumen de clasificaciones
+CREATE OR REPLACE VIEW resumen_clasificaciones AS
+SELECT 
+    clasificacion,
+    COUNT(*) as total,
+    AVG(tiempo_respuesta_ms) as tiempo_promedio_ms,
+    COUNT(DISTINCT session_id) as sesiones_unicas,
+    COUNT(DISTINCT user_id) as usuarios_unicos
+FROM clasificaciones_llm
+GROUP BY clasificacion
+ORDER BY total DESC;
+
+-- Vista de métricas por modelo
+CREATE OR REPLACE VIEW metricas_llm_por_modelo AS
+SELECT 
+    modelo,
+    COUNT(*) as total_clasificaciones,
+    AVG(tiempo_respuesta_ms) as tiempo_promedio_ms,
+    MIN(tiempo_respuesta_ms) as tiempo_min_ms,
+    MAX(tiempo_respuesta_ms) as tiempo_max_ms
+FROM clasificaciones_llm
+GROUP BY modelo
+ORDER BY total_clasificaciones DESC;
+
+-- Función de búsqueda semántica en historiales
+CREATE OR REPLACE FUNCTION buscar_historiales_semantica(
+    p_paciente_id INTEGER,
+    p_embedding vector(384),
+    p_limit INTEGER DEFAULT 5
+)
+RETURNS TABLE(
+    id INTEGER,
+    diagnostico_principal TEXT,
+    sintomas TEXT,
+    similarity FLOAT,
+    fecha_consulta DATE
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        h.id,
+        h.diagnostico_principal,
+        h.sintomas,
+        1 - (h.embedding <=> p_embedding) AS similarity,
+        h.fecha_consulta
+    FROM historiales_medicos h
+    WHERE h.paciente_id = p_paciente_id 
+        AND h.embedding IS NOT NULL
+    ORDER BY h.embedding <=> p_embedding
+    LIMIT p_limit;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- =====================================================================
+-- 9. SISTEMA DE SINCRONIZACIÓN GOOGLE CALENDAR (ETAPA 5)
+-- =====================================================================
+-- Tabla de sincronización con Google Calendar
+CREATE TABLE IF NOT EXISTS sincronizacion_calendar (
+    id SERIAL PRIMARY KEY,
+    cita_id INTEGER REFERENCES citas_medicas(id) NOT NULL,
+    google_event_id VARCHAR(200),
+    estado VARCHAR(20) DEFAULT 'pendiente'
+        CHECK (estado IN ('sincronizada', 'pendiente', 'error', 'reintentando', 'error_permanente')),
+    ultimo_intento TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    siguiente_reintento TIMESTAMP,
+    intentos INTEGER DEFAULT 0,
+    max_intentos INTEGER DEFAULT 5,
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Índices para sincronización
+CREATE INDEX IF NOT EXISTS idx_sync_cita_id ON sincronizacion_calendar(cita_id);
+CREATE INDEX IF NOT EXISTS idx_sync_pendientes 
+    ON sincronizacion_calendar(estado, siguiente_reintento)
+    WHERE estado IN ('error', 'pendiente', 'reintentando');
+
+COMMENT ON TABLE sincronizacion_calendar IS 
+'Control de sincronización bidireccional con Google Calendar con reintento automático';
+
+
+-- =====================================================================
+-- 10. SISTEMA DE MÉTRICAS Y REPORTES (ETAPA 7)
+-- =====================================================================
+-- Tabla de métricas agregadas por doctor
+CREATE TABLE IF NOT EXISTS metricas_consultas (
+    id SERIAL PRIMARY KEY,
+    doctor_id INTEGER REFERENCES doctores(id) NOT NULL,
+    fecha DATE NOT NULL,
+    total_citas INTEGER DEFAULT 0,
+    citas_completadas INTEGER DEFAULT 0,
+    citas_canceladas INTEGER DEFAULT 0,
+    citas_no_asistio INTEGER DEFAULT 0,
+    ingresos_totales DECIMAL(10,2) DEFAULT 0,
+    duracion_promedio_minutos INTEGER DEFAULT 0,
+    pacientes_nuevos INTEGER DEFAULT 0,
+    pacientes_recurrentes INTEGER DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(doctor_id, fecha)
+);
+
+CREATE INDEX IF NOT EXISTS idx_metricas_doctor_fecha ON metricas_consultas(doctor_id, fecha DESC);
+
+COMMENT ON TABLE metricas_consultas IS 
+'Métricas diarias agregadas por doctor para reportes y análisis';
+
+-- Tabla de reportes generados
+CREATE TABLE IF NOT EXISTS reportes_generados (
+    id SERIAL PRIMARY KEY,
+    doctor_id INTEGER REFERENCES doctores(id) NOT NULL,
+    tipo_reporte VARCHAR(50) NOT NULL 
+        CHECK (tipo_reporte IN ('disponibilidad', 'estadisticas', 'busqueda', 'personalizado')),
+    fecha_inicio DATE NOT NULL,
+    fecha_fin DATE NOT NULL,
+    parametros JSONB DEFAULT '{}'::jsonb,
+    resultado JSONB DEFAULT '{}'::jsonb,
+    formato VARCHAR(20) DEFAULT 'json' 
+        CHECK (formato IN ('json', 'pdf', 'csv', 'xlsx')),
+    generado_por VARCHAR(100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_reportes_doctor ON reportes_generados(doctor_id);
+CREATE INDEX IF NOT EXISTS idx_reportes_tipo ON reportes_generados(tipo_reporte);
+CREATE INDEX IF NOT EXISTS idx_reportes_fecha ON reportes_generados(created_at DESC);
+
+COMMENT ON TABLE reportes_generados IS 
+'Histórico de reportes generados para auditoría y cache de consultas complejas';
+
+-- Vista de estadísticas por doctor
+CREATE OR REPLACE VIEW vista_estadisticas_doctores AS
+SELECT 
+    d.id as doctor_id,
+    d.nombre_completo,
+    d.especialidad,
+    COUNT(DISTINCT c.id) as total_citas,
+    COUNT(DISTINCT CASE WHEN c.estado = 'completada' THEN c.id END) as citas_completadas,
+    COUNT(DISTINCT c.paciente_id) as total_pacientes,
+    COALESCE(SUM(c.costo_consulta), 0) as ingresos_totales,
+    AVG(EXTRACT(EPOCH FROM (c.fecha_hora_fin - c.fecha_hora_inicio))/60) as duracion_promedio_minutos,
+    MAX(c.fecha_hora_inicio) as ultima_cita,
+    d.total_citas_asignadas as turnos_asignados
+FROM doctores d
+LEFT JOIN citas_medicas c ON d.id = c.doctor_id
+GROUP BY d.id, d.nombre_completo, d.especialidad, d.total_citas_asignadas;
+
+-- Función para actualizar métricas de doctor
+CREATE OR REPLACE FUNCTION actualizar_metricas_doctor(
+    p_doctor_id INTEGER,
+    p_fecha DATE DEFAULT CURRENT_DATE
+)
+RETURNS VOID AS $$
+BEGIN
+    INSERT INTO metricas_consultas (
+        doctor_id, fecha, total_citas, citas_completadas, citas_canceladas, 
+        citas_no_asistio, ingresos_totales, duracion_promedio_minutos
+    )
+    SELECT 
+        p_doctor_id,
+        p_fecha,
+        COUNT(*),
+        COUNT(*) FILTER (WHERE estado = 'completada'),
+        COUNT(*) FILTER (WHERE estado = 'cancelada'),
+        COUNT(*) FILTER (WHERE estado = 'no_asistio'),
+        COALESCE(SUM(costo_consulta) FILTER (WHERE estado = 'completada'), 0),
+        AVG(EXTRACT(EPOCH FROM (fecha_hora_fin - fecha_hora_inicio))/60)::INTEGER
+    FROM citas_medicas
+    WHERE doctor_id = p_doctor_id 
+        AND DATE(fecha_hora_inicio) = p_fecha
+    ON CONFLICT (doctor_id, fecha) DO UPDATE
+    SET 
+        total_citas = EXCLUDED.total_citas,
+        citas_completadas = EXCLUDED.citas_completadas,
+        citas_canceladas = EXCLUDED.citas_canceladas,
+        citas_no_asistio = EXCLUDED.citas_no_asistio,
+        ingresos_totales = EXCLUDED.ingresos_totales,
+        duracion_promedio_minutos = EXCLUDED.duracion_promedio_minutos,
+        updated_at = CURRENT_TIMESTAMP;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger para actualizar métricas automáticamente
+CREATE OR REPLACE FUNCTION trigger_actualizar_metricas()
+RETURNS TRIGGER AS $$
+BEGIN
+    PERFORM actualizar_metricas_doctor(NEW.doctor_id, DATE(NEW.fecha_hora_inicio));
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trigger_actualizar_metricas ON citas_medicas;
+CREATE TRIGGER trigger_actualizar_metricas
+AFTER INSERT OR UPDATE ON citas_medicas
+FOR EACH ROW
+EXECUTE FUNCTION trigger_actualizar_metricas();
+
+-- Función para buscar citas por periodo
+CREATE OR REPLACE FUNCTION buscar_citas_por_periodo(
+    p_doctor_id INTEGER,
+    p_fecha_inicio DATE,
+    p_fecha_fin DATE
+)
+RETURNS TABLE(
+    id INTEGER,
+    paciente_nombre VARCHAR,
+    fecha_hora TIMESTAMP,
+    estado VARCHAR,
+    tipo_consulta VARCHAR
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        c.id,
+        p.nombre_completo,
+        c.fecha_hora_inicio,
+        c.estado::VARCHAR,
+        c.tipo_consulta::VARCHAR
+    FROM citas_medicas c
+    JOIN pacientes p ON c.paciente_id = p.id
+    WHERE c.doctor_id = p_doctor_id
+        AND DATE(c.fecha_hora_inicio) BETWEEN p_fecha_inicio AND p_fecha_fin
+    ORDER BY c.fecha_hora_inicio;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- =====================================================================
+-- 11. TABLAS INTERNAS DE LANGGRAPH (Checkpoint Automático)
 -- =====================================================================
 -- LangGraph creará automáticamente estas tablas al ejecutar setup():
 -- - checkpoints: Estado de cada sesión (TTL 24h)
@@ -200,7 +653,7 @@ COMMENT ON VIEW auditoria_para_limpiar IS
 
 
 -- =====================================================================
--- 6. FUNCIÓN DE MANTENIMIENTO: Limpieza Automática de Auditoría
+-- 12. FUNCIÓN DE MANTENIMIENTO: Limpieza Automática de Auditoría
 -- =====================================================================
 CREATE OR REPLACE FUNCTION limpiar_auditoria_antigua()
 RETURNS INTEGER AS $$
@@ -225,7 +678,7 @@ COMMENT ON FUNCTION limpiar_auditoria_antigua IS
 
 
 -- =====================================================================
--- 7. VERIFICACIÓN FINAL
+-- 13. VERIFICACIÓN FINAL
 -- =====================================================================
 DO $$
 BEGIN
@@ -234,8 +687,18 @@ BEGIN
     RAISE NOTICE '🛠️  Herramientas disponibles: % registros', (SELECT COUNT(*) FROM herramientas_disponibles);
     RAISE NOTICE '🧠 Memoria episódica: Lista para embeddings de 384 dims';
     RAISE NOTICE '📝 Auditoría de conversaciones: Retención 6 meses';
+    RAISE NOTICE '� Sistema de usuarios: % usuarios registrados', (SELECT COUNT(*) FROM usuarios);
+    RAISE NOTICE '⚕️  Doctores: % registrados', (SELECT COUNT(*) FROM doctores);
+    RAISE NOTICE '🏥 Pacientes: % registrados', (SELECT COUNT(*) FROM pacientes);
+    RAISE NOTICE '📅 Citas médicas: % programadas', (SELECT COUNT(*) FROM citas_medicas);
+    RAISE NOTICE '📋 Historiales médicos: % registros', (SELECT COUNT(*) FROM historiales_medicos);
+    RAISE NOTICE '🔄 Sistema de sincronización: Configurado';
+    RAISE NOTICE '📊 Sistema de métricas: Configurado';
     RAISE NOTICE '💾 Tablas de LangGraph: Se crearán al ejecutar checkpointer.setup()';
     RAISE NOTICE '🎯 Puerto: 5434 (externo) → 5432 (interno)';
+    RAISE NOTICE '';
+    RAISE NOTICE '🎉 ¡TODAS LAS ETAPAS CONSOLIDADAS!';
+    RAISE NOTICE '   Ya no es necesario ejecutar migraciones por separado';
 END $$;
 
 -- Consultar estado de las tablas creadas

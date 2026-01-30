@@ -76,6 +76,7 @@ from src.state.agent_state import WhatsAppAgentState
 
 # ==================== IMPORTS DE NODOS ====================
 from src.nodes.identificacion_usuario_node import nodo_identificacion_usuario_wrapper
+from src.nodes.cache_sesion_node import nodo_cache_sesion_wrapper
 from src.nodes.router_identidad_node import nodo_router_identidad_wrapper
 from src.nodes.filtrado_inteligente_node import nodo_filtrado_inteligente_wrapper
 from src.nodes.recuperacion_episodica_node import nodo_recuperacion_episodica_wrapper
@@ -87,25 +88,6 @@ from src.nodes.recepcionista_node import nodo_recepcionista_wrapper
 from src.nodes.generacion_resumen_node import nodo_generacion_resumen_wrapper
 from src.nodes.persistencia_episodica_node import nodo_persistencia_episodica_wrapper
 from src.nodes.sincronizador_hibrido_node import nodo_sincronizador_hibrido_wrapper
-
-
-# ==================== NODO DE CACHÉ (STUB) ====================
-
-def nodo_cache_sesion(state: WhatsAppAgentState) -> WhatsAppAgentState:
-    """
-    [N1] Nodo de Caché de Sesión con gestión de TTL (24h)
-    
-    Detecta si la sesión ha expirado y marca para auto-resumen.
-    """
-    logger.info("🗄️  [N1] CACHE_SESION - Verificando caché de sesión")
-    logger.info(f"    User ID: {state.get('user_id', 'N/A')}")
-    logger.info(f"    Session ID: {state.get('session_id', 'N/A')}")
-
-    # Por simplicidad, marcamos sesión como activa
-    state["sesion_expirada"] = False
-    state["timestamp"] = datetime.now().isoformat()
-    
-    return state
 
 
 # ==================== FUNCIONES DE DECISIÓN ====================
@@ -244,8 +226,8 @@ def crear_grafo_whatsapp() -> StateGraph:
     # N0: Identificación Usuario (punto de entrada)
     workflow.add_node("identificacion_usuario", nodo_identificacion_usuario_wrapper)
     
-    # N1: Caché Sesión (stub por ahora)
-    workflow.add_node("cache_sesion", nodo_cache_sesion)
+    # N1: Caché Sesión
+    workflow.add_node("cache_sesion", nodo_cache_sesion_wrapper)
     
     # N2: Router por Identidad (NUEVO - reemplaza clasificación LLM en 98% casos)
     workflow.add_node("router_identidad", nodo_router_identidad_wrapper)

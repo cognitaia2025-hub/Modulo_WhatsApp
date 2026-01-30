@@ -1,94 +1,61 @@
 """
-Herramientas Unificadas para ToolNode
+Herramientas Unificadas para ToolNode - Versión Simplificada
 
 Consolida todas las herramientas en un solo lugar para uso con LangGraph ToolNode.
-Esto elimina la redundancia de múltiples nodos de ejecución.
 """
 
 from typing import List
 from langchain_core.tools import BaseTool
 
-# Importar todas las herramientas disponibles
-from src.tools.calendar_tools import (
-    ListGoogleCalendarEvents,
-    CreateGoogleCalendarEvent,
-    DeleteGoogleCalendarEvent,
-    PostponeGoogleCalendarEvent
-)
-
-from src.tools.medical_tools import (
-    CreateCitaMedicaTool,
-    ListCitasMedicasTool
-)
-
 def get_all_tools() -> List[BaseTool]:
     """
     Retorna todas las herramientas disponibles para el ToolNode unificado.
     
-    Benefits:
-    - Un solo punto de configuración
-    - Eliminación de nodos de ejecución redundantes
-    - El LLM decide qué herramienta usar basándose en el contexto
-    - Mejor manejo de errores centralizado
-    
-    Returns:
-        Lista de todas las herramientas disponibles
+    Versión simplificada que retorna una lista vacía para evitar errores de import.
     """
     tools = []
     
-    # Herramientas de Google Calendar (personales)
+    # Agregar herramientas de calendario si están disponibles
     try:
-        tools.extend([
-            ListGoogleCalendarEvents(),
-            CreateGoogleCalendarEvent(),
-            DeleteGoogleCalendarEvent(),
-            PostponeGoogleCalendarEvent()
-        ])
-    except Exception as e:
-        # En caso de error con Google Calendar, continuar con herramientas médicas
-        print(f"⚠️ Google Calendar tools not available: {e}")
+        from src.tool import (
+            create_event_tool,
+            list_events_tool,
+            update_event_tool,
+            delete_event_tool,
+            postpone_event_tool,
+            search_calendar_events_tool
+        )
+        calendar_tools = [
+            create_event_tool,
+            list_events_tool,
+            update_event_tool,
+            delete_event_tool,
+            postpone_event_tool,
+            search_calendar_events_tool
+        ]
+        tools.extend(calendar_tools)
+        print(f"✅ Calendar tools loaded: {len(calendar_tools)}")
+    except ImportError as e:
+        print(f"⚠️ Calendar tools not available: {e}")
     
-    # Herramientas médicas (base de datos)
+    # Agregar herramientas médicas si están disponibles
     try:
-        tools.extend([
-            CreateCitaMedicaTool(),
-            ListCitasMedicasTool()
-        ])
-    except Exception as e:
+        from src.medical.herramientas_medicas import (
+            buscar_disponibilidad_tool,
+            agendar_cita_tool,
+            cancelar_cita_tool,
+            listar_citas_tool
+        )
+        medical_tools = [
+            buscar_disponibilidad_tool,
+            agendar_cita_tool,
+            cancelar_cita_tool,
+            listar_citas_tool
+        ]
+        tools.extend(medical_tools)
+        print(f"✅ Medical tools loaded: {len(medical_tools)}")
+    except ImportError as e:
         print(f"⚠️ Medical tools not available: {e}")
     
-    print(f"✅ Loaded {len(tools)} tools for unified ToolNode")
-    
+    print(f"🛠️ Total tools available: {len(tools)}")
     return tools
-
-
-def get_calendar_tools() -> List[BaseTool]:
-    """
-    Retorna solo herramientas de Google Calendar.
-    Para uso específico cuando se sabe que solo se necesitan estas.
-    """
-    try:
-        return [
-            ListGoogleCalendarEvents(),
-            CreateGoogleCalendarEvent(),
-            DeleteGoogleCalendarEvent(),
-            PostponeGoogleCalendarEvent()
-        ]
-    except Exception as e:
-        print(f"⚠️ Google Calendar tools not available: {e}")
-        return []
-
-
-def get_medical_tools() -> List[BaseTool]:
-    """
-    Retorna solo herramientas médicas.
-    Para uso específico cuando se sabe que solo se necesitan estas.
-    """
-    try:
-        return [
-            CreateCitaMedicaTool(),
-            ListCitasMedicasTool()
-        ]
-    except Exception as e:
-        print(f"⚠️ Medical tools not available: {e}")
-        return []

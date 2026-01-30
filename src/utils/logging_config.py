@@ -81,14 +81,15 @@ def log_separator(logger: logging.Logger, node_name: str, stage: str = "INICIO")
         node_name: Nombre del nodo (ej: "NODO_1_CACHE")
         stage: "INICIO" o "FIN"
     """
-    separator = "=" * 100
+    separator = "=" * 120
     colored_separator = f"{LogColors.SEPARATOR}{separator}{LogColors.RESET}"
-    message = f"{LogColors.SEPARATOR}{'▶' if stage == 'INICIO' else '◀'} [{node_name}] - {stage} {LogColors.RESET}"
+    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    arrow = "🔄 ▶" if stage == "INICIO" else "✅ ◀"
+    message = f"{LogColors.SEPARATOR}{arrow} [{timestamp}] {node_name} - {stage} {LogColors.RESET}"
     
     logger.info(colored_separator)
     logger.info(message)
-    if stage == "INICIO":
-        logger.info(colored_separator)
+    logger.info(colored_separator)
 
 
 def log_node_io(logger: logging.Logger, direction: str, node_name: str, content: str, truncate: int = 500):

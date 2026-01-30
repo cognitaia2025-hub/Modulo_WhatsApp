@@ -16,8 +16,16 @@ from src.utils.logging_config import (
     LogColors
 )
 
-# Configurar logging con colores
+# Configurar logging con colores - LEVEL DEBUG PARA VER TODO EL FLUJO
 logger = setup_colored_logging()
+logger.setLevel(logging.DEBUG)
+
+# Habilitar logging verbose para LangGraph
+logging.getLogger("langgraph").setLevel(logging.DEBUG)
+logging.getLogger("src").setLevel(logging.DEBUG)
+
+# Debug inicial
+logger.debug("🐛 [DEBUG] Logging habilitado - Nivel DEBUG para flujo completo")
 
 # Import graph desde el proyecto actual
 from src.graph_whatsapp_etapa8 import crear_grafo_whatsapp
@@ -208,6 +216,14 @@ async def whatsapp_message(data: WhatsAppMessage):
     Adapta el formato de WhatsApp al formato del grafo.
     """
     try:
+        # LOGGING DETALLADO: Mensaje de entrada
+        logger.info(f"📥 === MENSAJE ENTRANTE ===")
+        logger.info(f"📱 Chat ID: {data.chat_id}")
+        logger.info(f"👤 Sender: {data.sender_name}")
+        logger.info(f"💬 Message: {data.message}")
+        logger.info(f"⏰ Timestamp: {data.timestamp}")
+        logger.info(f"🔄 === INICIANDO PROCESAMIENTO ===")
+
         # Log del mensaje del usuario
         log_user_message(logger, data.message)
 
@@ -216,8 +232,11 @@ async def whatsapp_message(data: WhatsAppMessage):
         if not phone_number.startswith('+'):
             phone_number = f"+{phone_number}"
 
+        logger.debug(f"📞 Phone extracted: {phone_number}")
+
         # ✅ Obtener o crear sesión con rolling window (pasando conexión BD)
         user_id, session_id, config = get_or_create_session(phone_number, db_conn)
+        logger.debug(f"🗂️ Session - User ID: {user_id}, Session ID: {session_id}")
 
         # Generar timestamp actual (siempre en backend para consistencia)
         timestamp_actual = pendulum.now('America/Tijuana').to_iso8601_string()
@@ -233,8 +252,14 @@ async def whatsapp_message(data: WhatsAppMessage):
         # NOTA: NO incluimos estado_conversacion, clasificacion_mensaje, etc.
         # Estos se restaurarán del checkpoint de LangGraph
 
+        logger.debug(f"📊 Estado inicial: {estado}")
+        logger.info(f"🚀 === EJECUTANDO GRAFO WHATSAPP OPTIMIZADO ===")
+
         # Invocar grafo con config
         result = grafo.invoke(estado, config)
+
+        logger.info(f"✅ === GRAFO COMPLETADO ===")
+        logger.debug(f"📋 Resultado completo: {result}")
 
         # Extraer respuesta del agente (último mensaje AI)
         if "messages" in result and len(result["messages"]) > 0:

@@ -315,7 +315,10 @@ def crear_grafo_whatsapp() -> StateGraph:
     # N6: Respuesta Conversacional (chat casual)
     workflow.add_node("respuesta_conversacional", nodo_respuesta_conversacional_wrapper)
     
-    # N7: Resumen Asíncrono (sin bloquear respuesta)
+    # N7: Sincronizador Híbrido (sincronización Google Calendar)
+    workflow.add_node("sincronizador_hibrido", nodo_sincronizador_hibrido_wrapper)
+    
+    # N8: Resumen Asíncrono (sin bloquear respuesta)
     workflow.add_node("generacion_resumen_async", nodo_resumen_async_wrapper)
     
     
@@ -408,6 +411,8 @@ def crear_grafo_whatsapp() -> StateGraph:
             logger.warning("    ℹ️  El grafo funcionará sin persistencia de checkpoints")
             checkpointer = None
     else:
+        logger.info("    ℹ️  DB_CONNECTION_STRING no configurado")
+        checkpointer = None
     
     # ==================== COMPILAR GRAFO ====================
     

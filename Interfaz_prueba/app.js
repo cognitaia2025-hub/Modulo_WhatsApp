@@ -244,34 +244,33 @@ async function verificarConexionBackend() {
     
     try {
         // Verificar servidor simulador primero
-        const response = await fetch('/api/status', {
+        const backendUrl = window.location.origin.replace('-3002.', '-8002.');
+        const response = await fetch(`${backendUrl}/api/status`, {
             method: 'GET',
             headers: { 'Content-Type': 'application/json' }
         });
         
         if (response.ok) {
-            const data = await response.json();
-            const backendHealthy = data.backend.status === 'healthy';
-            
+            // Conectado directamente al backend
             if (statusDot) {
-                statusDot.className = backendHealthy ? 'status-dot online' : 'status-dot offline';
-                statusText.textContent = backendHealthy ? 'Conectado' : 'Backend offline';
+                statusDot.className = 'status-dot online';
+                statusText.textContent = 'Conectado';
             }
             if (serverStatus) {
-                serverStatus.textContent = backendHealthy ? '🟢 Activo' : '🟡 Simulador OK, Backend OFF';
+                serverStatus.textContent = '🟢 Activo';
             }
             
-            console.log('✅ Estado del sistema:', data);
+            console.log('✅ Backend disponible en puerto 8000');
         } else {
-            throw new Error('Simulador no disponible');
+            throw new Error('Backend no disponible');
         }
     } catch (error) {
-        console.warn('⚠️ No se pudo conectar al simulador:', error);
+        console.warn('⚠️ No se pudo conectar al backend:', error);
         if (statusDot) {
             statusDot.className = 'status-dot offline';
             statusText.textContent = 'Desconectado';
         }
-        if (serverStatus) serverStatus.textContent = '🔴 Inactivo';
+        if (serverStatus) serverStatus.textContent = '🔴 Backend Inactivo';
     }
 }
 
@@ -334,8 +333,9 @@ async function enviarMensajeConTipeo() {
     mostrarIndicadorTipeo();
     
     try {
-        // Usar endpoint del servidor simulador local
-        const response = await fetch('/api/message', {
+        // Usar endpoint directo del backend
+        const backendUrl = window.location.origin.replace('-3002.', '-8002.');
+        const response = await fetch(`${backendUrl}/api/whatsapp-agent/message`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)

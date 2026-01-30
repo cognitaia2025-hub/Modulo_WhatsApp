@@ -110,6 +110,7 @@ Estos nodos utilizan modelos de inteligencia artificial (GPT-4, Claude) para ent
 
 **¿Para qué sirve?**
 - Auditoría de conversaciones
+
 - Recordar el contexto en futuras interacciones
 - Estadísticas de uso del sistema
 

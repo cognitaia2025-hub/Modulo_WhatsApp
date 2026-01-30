@@ -62,6 +62,10 @@ class WhatsAppAgentState(TypedDict):
     modelo_clasificacion_usado: Optional[str]  # 'deepseek', 'claude'
     tiempo_clasificacion_ms: Optional[int]  # Tiempo de procesamiento
     
+    # Router por Identidad (ETAPA 9 - Optimización)
+    ruta_siguiente: Optional[str]  # 'recepcionista', 'medica', 'personal', 'clasificador_llm'
+    requiere_clasificacion_llm: bool  # True solo si el mensaje es genuinamente ambiguo
+    
     # Recuperación Médica (ETAPA 3)
     contexto_medico: Optional[Dict[str, Any]]  # Pacientes recientes, citas, estadísticas
     

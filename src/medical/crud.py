@@ -16,15 +16,49 @@ from ..database.db_config import get_db_session
 
 # ===== OPERACIONES DE DOCTORES =====
 
-def get_doctor_by_phone(phone_number: str) -> Optional[Doctores]:
-    """Obtiene doctor por número de teléfono"""
+def get_doctor_by_phone(phone_number: str) -> Optional[Dict[str, Any]]:
+    """
+    Obtiene doctor por número de teléfono.
+    
+    Returns:
+        Dict con datos del doctor o None si no existe.
+        Retorna dict para evitar DetachedInstanceError fuera de sesión.
+    """
     with get_db_session() as db:
-        return db.query(Doctores).filter(Doctores.phone_number == phone_number).first()
+        doctor = db.query(Doctores).filter(Doctores.phone_number == phone_number).first()
+        if doctor:
+            return {
+                "id": doctor.id,
+                "nombre_completo": doctor.nombre_completo,
+                "phone_number": doctor.phone_number,
+                "especialidad": doctor.especialidad,
+                "num_licencia": doctor.num_licencia,
+                "orden_turno": doctor.orden_turno,
+                "total_citas_asignadas": doctor.total_citas_asignadas
+            }
+        return None
 
-def get_doctor_by_id(doctor_id: int) -> Optional[Doctores]:
-    """Obtiene doctor por ID"""
+def get_doctor_by_id(doctor_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Obtiene doctor por ID.
+    
+    Returns:
+        Dict con datos del doctor o None si no existe.
+        Retorna dict para evitar DetachedInstanceError fuera de sesión.
+    """
     with get_db_session() as db:
-        return db.query(Doctores).filter(Doctores.id == doctor_id).first()
+        doctor = db.query(Doctores).filter(Doctores.id == doctor_id).first()
+        if doctor:
+            return {
+                "id": doctor.id,
+                "nombre_completo": doctor.nombre_completo,
+                "phone_number": doctor.phone_number,
+                "especialidad": doctor.especialidad,
+                "num_licencia": doctor.num_licencia,
+                "orden_turno": doctor.orden_turno,
+                "total_citas_asignadas": doctor.total_citas_asignadas
+            }
+        return None
 
 def create_doctor(doctor_data: dict) -> Doctores:
     """Crea un nuevo doctor"""
@@ -83,15 +117,33 @@ def search_patients(doctor_id: int, search_term: str, limit: int = 10) -> List[P
         
         return query.order_by(Pacientes.ultima_cita.desc().nullslast()).limit(limit).all()
 
-def get_patient_by_id(patient_id: int) -> Optional[Pacientes]:
-    """Obtiene paciente por ID"""
+def get_patient_by_id(patient_id: int) -> Optional[Dict[str, Any]]:
+    """Obtiene paciente por ID. Retorna dict para evitar problemas de sesión."""
     with get_db_session() as db:
-        return db.query(Pacientes).filter(Pacientes.id == patient_id).first()
+        paciente = db.query(Pacientes).filter(Pacientes.id == patient_id).first()
+        if paciente:
+            return {
+                "id": paciente.id,
+                "doctor_id": paciente.doctor_id,
+                "nombre_completo": paciente.nombre_completo,
+                "telefono": paciente.telefono,
+                "email": paciente.email
+            }
+        return None
 
-def get_paciente_by_phone(phone_number: str) -> Optional[Pacientes]:
-    """Obtiene paciente por número de teléfono"""
+def get_paciente_by_phone(phone_number: str) -> Optional[Dict[str, Any]]:
+    """Obtiene paciente por número de teléfono. Retorna dict para evitar problemas de sesión."""
     with get_db_session() as db:
-        return db.query(Pacientes).filter(Pacientes.telefono == phone_number).first()
+        paciente = db.query(Pacientes).filter(Pacientes.telefono == phone_number).first()
+        if paciente:
+            return {
+                "id": paciente.id,
+                "doctor_id": paciente.doctor_id,
+                "nombre_completo": paciente.nombre_completo,
+                "telefono": paciente.telefono,
+                "email": paciente.email
+            }
+        return None
 
 def registrar_paciente_externo(phone_number: str, nombre: str) -> Dict[str, Any]:
     """
@@ -279,6 +331,59 @@ def check_appointment_conflicts(
             query = query.filter(CitasMedicas.id != exclude_cita_id)
             
         return query.count() > 0
+
+
+def agendar_cita_simple(
+    doctor_id: int,
+    paciente_id: int,
+    fecha_inicio: datetime,
+    fecha_fin: datetime,
+    motivo: str = "Consulta general"
+) -> Optional[int]:
+    """
+    Función simplificada para agendar citas desde el recepcionista.
+    
+    Args:
+        doctor_id: ID del doctor
+        paciente_id: ID del paciente
+        fecha_inicio: Fecha y hora de inicio
+        fecha_fin: Fecha y hora de fin
+        motivo: Motivo de la consulta
+        
+    Returns:
+        ID de la cita creada o None si falla
+    """
+    with get_db_session() as db:
+        try:
+            # Crear la cita
+            cita = CitasMedicas(
+                doctor_id=doctor_id,
+                paciente_id=paciente_id,
+                fecha_hora_inicio=fecha_inicio,
+                fecha_hora_fin=fecha_fin,
+                tipo_consulta=TipoConsulta.primera_vez,
+                estado=EstadoCita.programada,
+                motivo_consulta=motivo,
+                created_at=datetime.now()
+            )
+            db.add(cita)
+            db.commit()
+            db.refresh(cita)
+            
+            # Actualizar última cita del paciente
+            paciente = db.query(Pacientes).filter(Pacientes.id == paciente_id).first()
+            if paciente:
+                paciente.ultima_cita = fecha_inicio
+                db.commit()
+            
+            return cita.id
+            
+        except Exception as e:
+            db.rollback()
+            import logging
+            logging.getLogger(__name__).error(f"Error agendando cita: {e}")
+            return None
+
 
 def get_available_slots(doctor_id: int, fecha: date, duracion_minutos: int = 30) -> List[Dict]:
     """Genera slots disponibles basado en horarios y citas existentes"""

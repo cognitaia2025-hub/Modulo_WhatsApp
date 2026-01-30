@@ -24,6 +24,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from dotenv import load_dotenv
 import os
 import psycopg
+from psycopg.types.json import Json
 
 from src.state.agent_state import WhatsAppAgentState
 

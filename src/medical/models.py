@@ -48,12 +48,15 @@ class Doctores(Base):
     
     id = Column(Integer, primary_key=True)
     phone_number = Column(String, ForeignKey('usuarios.phone_number'), nullable=False)
+    nombre_completo = Column(String, nullable=True)
     especialidad = Column(String, nullable=False)
     num_licencia = Column(String, unique=True)
     horario_atencion = Column(JSONB, default={})
     direccion_consultorio = Column(String)
     tarifa_consulta = Column(DECIMAL(10,2))
     años_experiencia = Column(Integer, default=0)
+    orden_turno = Column(Integer, default=0)
+    total_citas_asignadas = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.now)
     
     # Relaciones

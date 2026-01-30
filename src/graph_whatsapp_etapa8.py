@@ -1,7 +1,7 @@
 """
 Grafo Principal del Agente de WhatsApp - ETAPA 8
 
-Implementa el flujo completo de 12 nodos con 3 funciones de decisión condicional.
+Implementa el flujo completo de 13 nodos con 3 funciones de decisión condicional.
 Incluye PostgresSaver para persistencia de checkpoints (caché 24h).
 
 FLUJO PRINCIPAL:
@@ -12,7 +12,7 @@ FLUJO PRINCIPAL:
 ├── │  - medica + doctor → N3B    │
 ├── │  - solicitud_cita → N6R     │  
 ├── │  - personal → N3A           │
-├── │  - chat_casual → N6         │
+├── │  - chat_casual → N6C        │
 ├── └─────────────────────────────┘
 ├── N3A: Recuperación Episódica (personal)
 ├── N3B: Recuperación Médica (doctor)
@@ -25,6 +25,7 @@ FLUJO PRINCIPAL:
 ├── N5A: Ejecución Personal
 ├── N5B: Ejecución Médica
 ├── N6R: Recepcionista (citas)
+├── N6C: Respuesta Conversacional (chat casual)
 ├── ┌─ DECISIÓN 3: Post-Recepcionista ─┐
 ├── │  - completado → N8              │
 ├── │  - otros → N6                   │
@@ -70,6 +71,7 @@ from src.nodes.seleccion_herramientas_node import nodo_seleccion_herramientas_wr
 from src.nodes.ejecucion_herramientas_node import nodo_ejecucion_herramientas_wrapper
 from src.nodes.ejecucion_medica_node import nodo_ejecucion_medica_wrapper
 from src.nodes.recepcionista_node import nodo_recepcionista_wrapper
+from src.nodes.respuesta_conversacional_node import nodo_respuesta_conversacional_wrapper
 from src.nodes.generacion_resumen_node import nodo_generacion_resumen_wrapper
 from src.nodes.persistencia_episodica_node import nodo_persistencia_episodica_wrapper
 from src.nodes.sincronizador_hibrido_node import nodo_sincronizador_hibrido_wrapper
@@ -100,7 +102,7 @@ def decidir_flujo_clasificacion(state: WhatsAppAgentState) -> Literal[
     "recepcionista",
     "recuperacion_medica", 
     "recuperacion_episodica",
-    "generacion_resumen"
+    "respuesta_conversacional"
 ]:
     """
     DECISIÓN 1: Flujo de Clasificación (después de N2)
@@ -108,18 +110,26 @@ def decidir_flujo_clasificacion(state: WhatsAppAgentState) -> Literal[
     Decide la ruta según clasificación y tipo de usuario.
     
     Reglas:
+    - Si estado_conversacion indica flujo activo → mantener flujo (Recepcionista)
     - solicitud_cita (cualquier usuario) → Recepcionista (N6R)
     - medica + doctor → Recuperación Médica (N3B) 
     - personal → Recuperación Episódica (N3A)
-    - chat_casual → Generación Resumen (N6)
+    - chat_casual → Respuesta Conversacional (genera respuesta antes de auditoría)
     """
-    clasificacion = state.get('clasificacion', '')
+    clasificacion = state.get('clasificacion_mensaje', '')
     tipo_usuario = state.get('tipo_usuario', '')
+    estado_conv = state.get('estado_conversacion', 'inicial')
     
-    logger.info(f"🔀 DECISIÓN 1 - Clasificación: {clasificacion}, Usuario: {tipo_usuario}")
+    logger.info(f"🔀 DECISIÓN 1 - Clasificación: {clasificacion}, Usuario: {tipo_usuario}, Estado: {estado_conv}")
+    
+    # Caso 0: FLUJO ACTIVO DE RECEPCIONISTA - mantener conversación
+    # Si el estado indica que estamos en medio de un flujo de cita, ir directo al recepcionista
+    if estado_conv in ['esperando_seleccion', 'solicitando_nombre', 'confirmando']:
+        logger.info(f"    → Ruta: RECEPCIONISTA (flujo activo: {estado_conv})")
+        return "recepcionista"
     
     # Caso 1: Solicitud de cita (cualquier usuario) - prioridad máxima
-    if clasificacion == 'solicitud_cita':
+    if clasificacion in ['solicitud_cita', 'solicitud_cita_paciente', 'cita', 'agendar']:
         logger.info("    → Ruta: RECEPCIONISTA (solicitud de cita)")
         return "recepcionista"
 
@@ -133,10 +143,10 @@ def decidir_flujo_clasificacion(state: WhatsAppAgentState) -> Literal[
         logger.info("    → Ruta: RECUPERACION_EPISODICA (calendario personal)")
         return "recuperacion_episodica"
 
-    # Caso 4: Chat casual o consulta (sin herramientas)
+    # Caso 4: Chat casual o consulta → Respuesta conversacional (genera respuesta amigable)
     else:
-        logger.info("    → Ruta: GENERACION_RESUMEN (chat casual)")
-        return "generacion_resumen"
+        logger.info("    → Ruta: RESPUESTA_CONVERSACIONAL (chat casual)")
+        return "respuesta_conversacional"
 
 
 def decidir_tipo_ejecucion(state: WhatsAppAgentState) -> Literal[
@@ -250,6 +260,9 @@ def crear_grafo_whatsapp() -> StateGraph:
     # N6R: Recepcionista (citas)
     workflow.add_node("recepcionista", nodo_recepcionista_wrapper)
     
+    # N6C: Respuesta Conversacional (chat casual)
+    workflow.add_node("respuesta_conversacional", nodo_respuesta_conversacional_wrapper)
+    
     # N6: Generación Resumen
     workflow.add_node("generacion_resumen", nodo_generacion_resumen_wrapper)
     
@@ -259,7 +272,7 @@ def crear_grafo_whatsapp() -> StateGraph:
     # N8: Sincronizador Híbrido (Calendar)
     workflow.add_node("sincronizador_hibrido", nodo_sincronizador_hibrido_wrapper)
     
-    logger.info("    ✓ 12 nodos añadidos correctamente")
+    logger.info("    ✓ 13 nodos añadidos correctamente")
     
     # ==================== CONFIGURAR FLUJO Y DECISIONES ====================
     
@@ -276,7 +289,7 @@ def crear_grafo_whatsapp() -> StateGraph:
             "recepcionista": "recepcionista",
             "recuperacion_medica": "recuperacion_medica",
             "recuperacion_episodica": "recuperacion_episodica", 
-            "generacion_resumen": "generacion_resumen"
+            "respuesta_conversacional": "respuesta_conversacional"
         }
     )
     
@@ -310,6 +323,9 @@ def crear_grafo_whatsapp() -> StateGraph:
     # Todas las ejecuciones → Generación Resumen
     workflow.add_edge("ejecucion_herramientas", "generacion_resumen")
     workflow.add_edge("ejecucion_medica", "generacion_resumen")
+    
+    # Respuesta Conversacional → Generación Resumen (para auditoría)
+    workflow.add_edge("respuesta_conversacional", "generacion_resumen")
     
     # Sincronizador → Generación Resumen
     workflow.add_edge("sincronizador_hibrido", "generacion_resumen")

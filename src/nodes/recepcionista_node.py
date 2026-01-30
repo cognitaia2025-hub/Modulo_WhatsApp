@@ -139,7 +139,8 @@ Veo que es tu primera vez. Para poder agendarte una cita, necesito tu nombre com
     
     else:
         # Paciente existente - mostrar opciones directamente
-        logger.info(f"✅ Paciente existente: {paciente.nombre_completo}")
+        nombre_paciente = paciente.get('nombre_completo', 'paciente')
+        logger.info(f"✅ Paciente existente: {nombre_paciente}")
         
         # Generar slots disponibles
         slots = generar_slots_con_turnos(dias_adelante=7)
@@ -154,7 +155,7 @@ Lo siento, no tenemos disponibilidad en los próximos días.
         
         # Mostrar 3 opciones
         respuesta_slots = _formatear_opciones_slots(slots[:3])
-        respuesta = f"""¡Hola {paciente.nombre_completo}! 👋
+        respuesta = f"""¡Hola {nombre_paciente}! 👋
 
 {respuesta_slots}"""
         
@@ -259,13 +260,10 @@ Por favor escoge una de las opciones disponibles: {', '.join(OPCIONES_LETRAS[:le
             respuesta = """Ha ocurrido un problema. ¿Podrías intentar de nuevo desde el inicio?"""
             return respuesta, 'inicial'
         
-        # Construir fecha y hora para agendar
-        fecha_hora = f"{slot_elegido['fecha']} {slot_elegido['hora_inicio']}"
-        
-        logger.info(f"🎯 Agendando cita: paciente_id={paciente.id}, fecha_hora={fecha_hora}")
+        logger.info(f"🎯 Agendando cita: paciente_id={paciente['id']}, slot={slot_elegido['fecha']} {slot_elegido['hora_inicio']}")
         
         # Agendar usando el doctor asignado en el slot
-        # Nota: agendar_cita_medica_completa requiere doctor_phone, necesitamos obtenerlo
+        # get_doctor_by_id retorna dict
         doctor = get_doctor_by_id(slot_elegido['doctor_asignado_id'])
         
         if not doctor:
@@ -275,24 +273,31 @@ Por favor escoge una de las opciones disponibles: {', '.join(OPCIONES_LETRAS[:le
 ¿Podrías intentar de nuevo?"""
             return respuesta, 'inicial'
         
-        # Agendar la cita directamente usando función CRUD
-        from src.medical.crud import schedule_appointment
+        # Agendar la cita usando función CRUD simplificada
+        from src.medical.crud import agendar_cita_simple
+        from datetime import datetime as dt
         
-        # Agendar directamente
-        cita_id = schedule_appointment(
-            patient_id=paciente.id,
-            doctor_id=doctor.id,
-            date_time=fecha_hora,
-            consultation_type="primera_vez",
-            reason="Cita agendada via WhatsApp"
+        # Parsear fecha y hora del slot
+        fecha_inicio_str = f"{slot_elegido['fecha']} {slot_elegido['hora_inicio']}"
+        fecha_fin_str = f"{slot_elegido['fecha']} {slot_elegido['hora_fin']}"
+        fecha_inicio = dt.strptime(fecha_inicio_str, "%Y-%m-%d %H:%M")
+        fecha_fin = dt.strptime(fecha_fin_str, "%Y-%m-%d %H:%M")
+        
+        # Agendar la cita
+        cita_id = agendar_cita_simple(
+            doctor_id=doctor['id'],
+            paciente_id=paciente['id'],
+            fecha_inicio=fecha_inicio,
+            fecha_fin=fecha_fin,
+            motivo="Cita agendada via WhatsApp"
         )
         
         if cita_id:
-            logger.info("✅ Cita agendada exitosamente")
+            logger.info(f"✅ Cita agendada exitosamente (ID: {cita_id})")
             respuesta = f"""🎉 ¡Perfecto! Tu cita ha sido agendada.
 
 📅 **Detalles de tu cita:**
-{_formatear_detalle_slot_seleccionado(slot_elegido, doctor.nombre_completo)}
+{_formatear_detalle_slot_seleccionado(slot_elegido, doctor['nombre_completo'])}
 
 📞 Si necesitas cancelar o reprogramar, contáctanos al teléfono de la clínica.
 

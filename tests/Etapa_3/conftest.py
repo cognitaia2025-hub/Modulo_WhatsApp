@@ -23,10 +23,17 @@ def mock_deepseek_response():
 
 @pytest.fixture
 def mock_llm_clasificacion(mocker):
-    """Mock del LLM para clasificación"""
+    """Mock del LLM para clasificación - retorna ClasificacionResponse"""
+    from src.nodes.filtrado_inteligente_node import ClasificacionResponse
+    
     mock = mocker.patch('src.nodes.filtrado_inteligente_node.llm_primary')
-    response = Mock()
-    response.content = '{"clasificacion": "medica", "confianza": 0.95, "razonamiento": "Test"}'
+    
+    # Crear ClasificacionResponse de prueba
+    response = ClasificacionResponse(
+        clasificacion="medica",
+        confianza=0.95,
+        razonamiento="Test"
+    )
     mock.invoke.return_value = response
     return mock
 

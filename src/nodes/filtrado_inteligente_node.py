@@ -15,12 +15,13 @@ Estrategia:
 """
 
 import logging
-import json
 import time
-from typing import Dict
+from typing import Dict, Literal
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import SystemMessage, HumanMessage
+from langgraph.types import Command
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 import os
 import psycopg
@@ -34,125 +35,172 @@ logger = logging.getLogger(__name__)
 # Configuración de LLMs
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5434/agente_whatsapp")
 
-# LLM primario: DeepSeek
-llm_primary = ChatOpenAI(
+
+# ==================== PYDANTIC MODEL ====================
+
+class ClasificacionResponse(BaseModel):
+    """Respuesta estructurada del clasificador."""
+    
+    clasificacion: Literal["personal", "medica", "solicitud_cita_paciente", "chat"] = Field(
+        description="""
+        Categoría del mensaje:
+        - personal: Eventos de calendario personal
+        - medica: Solicitudes médicas de doctores
+        - solicitud_cita_paciente: Paciente externo pide cita
+        - chat: Conversación casual
+        """
+    )
+    
+    confianza: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Nivel de confianza en la clasificación (0.0 a 1.0)"
+    )
+    
+    razonamiento: str = Field(
+        description="Breve explicación de por qué se eligió esta clasificación"
+    )
+
+
+# ==================== CONFIGURACIÓN LLM CON STRUCTURED OUTPUT ====================
+
+# LLM primario: DeepSeek con structured output
+llm_primary_base = ChatOpenAI(
     model="deepseek-chat",
     temperature=0,
     max_tokens=200,
     api_key=os.getenv("DEEPSEEK_API_KEY"),
     base_url="https://api.deepseek.com/v1",
-    timeout=30.0,
+    timeout=10.0,  # ✅ Reducido de 30s a 10s (alineado con Maya)
     max_retries=0
 )
 
-# LLM fallback: Claude
-llm_fallback = ChatAnthropic(
+# LLM fallback: Claude con structured output
+llm_fallback_base = ChatAnthropic(
     model="claude-3-5-haiku-20241022",
     temperature=0,
     max_tokens=200,
     api_key=os.getenv("ANTHROPIC_API_KEY"),
-    timeout=20.0,
+    timeout=10.0,  # ✅ Reducido de 20s a 10s
     max_retries=0
 )
 
-# LLM con fallback automático
-llm_with_fallback = llm_primary.with_fallbacks([llm_fallback])
+# Configurar structured output
+llm_primary = llm_primary_base.with_structured_output(
+    ClasificacionResponse,
+    method="json_schema",
+    strict=True
+)
+
+llm_fallback = llm_fallback_base.with_structured_output(
+    ClasificacionResponse,
+    method="json_schema",
+    strict=True
+)
+
+
+# ==================== CONSTANTES ====================
+
+# Estados conversacionales que requieren saltar clasificación
+ESTADOS_FLUJO_ACTIVO = [
+    'recolectando_fecha',
+    'recolectando_hora', 
+    'esperando_confirmacion',
+    'mostrando_opciones'
+]
+
+# Mapeo de estados a nodos destino
+MAPEO_ESTADO_A_NODO = {
+    'recolectando_fecha': 'recepcionista',
+    'recolectando_hora': 'recepcionista',
+    'esperando_confirmacion': 'recepcionista',
+    'mostrando_opciones': 'generacion_resumen'
+}
 
 
 def construir_prompt_clasificacion(mensaje_usuario: str, tipo_usuario: str) -> list:
     """
-    Construye prompt para clasificación de mensajes
-    
-    Args:
-        mensaje_usuario: Mensaje del usuario
-        tipo_usuario: Tipo de usuario ('doctor', 'paciente_externo', etc.)
-        
-    Returns:
-        Lista de mensajes para el LLM
+    Construye prompt mejorado para clasificación de mensajes
     """
-    system_prompt = """Eres un clasificador de mensajes médicos. Tu trabajo es clasificar mensajes en EXACTAMENTE una de estas categorías:
+    system_prompt = """Eres un clasificador de mensajes para una clínica médica.
 
-CATEGORÍAS PERMITIDAS:
-1. "personal" - Eventos de calendario personal (cumpleaños, reuniones personales, recordatorios no médicos)
-2. "medica" - Solicitudes médicas de un doctor (revisar pacientes, agendar, historiales)
-3. "chat" - Conversación casual (saludos, despedidas, chat general)
-4. "solicitud_cita_paciente" - Paciente externo pide cita médica
+═══════════════════════════════════════════════════════════════
+CATEGORÍAS DISPONIBLES
+═══════════════════════════════════════════════════════════════
 
-REGLAS ESTRICTAS:
-- Responde ÚNICAMENTE con un JSON válido
-- Formato: {"clasificacion": "CATEGORIA", "confianza": 0.95, "razonamiento": "breve explicación"}
-- NO agregues texto fuera del JSON
-- confianza debe ser número entre 0.0 y 1.0
+1. "personal" - Eventos de calendario personal
+   • Cumpleaños, aniversarios
+   • Reuniones personales
+   • Recordatorios no médicos
+   • Ejemplos: "Recuérdame el cumpleaños de María", "Tengo junta el viernes"
 
-EJEMPLOS:
+2. "medica" - Solicitudes médicas (SOLO DOCTORES)
+   • Consultar pacientes específicos
+   • Revisar historiales médicos
+   • Agendar citas para pacientes
+   • Ejemplos: "¿Cómo está mi paciente Juan?", "Agendar consulta para María"
 
-Usuario dice: "Quiero una cita médica"
-Respuesta: {"clasificacion": "solicitud_cita_paciente", "confianza": 0.95, "razonamiento": "Paciente solicita cita"}
+3. "solicitud_cita_paciente" - Paciente externo pide cita
+   • Cualquier intención de agendar del paciente
+   • Consultas sobre disponibilidad
+   • Ejemplos: "Quiero una cita", "Necesito agendar", "¿Tienen espacio mañana?"
 
-Usuario dice (doctor): "¿Cómo está mi paciente Juan?"
-Respuesta: {"clasificacion": "medica", "confianza": 0.98, "razonamiento": "Doctor pregunta por paciente"}
+4. "chat" - Conversación casual
+   • Saludos y despedidas
+   • Agradecimientos
+   • Conversación general sin intención específica
+   • Ejemplos: "Hola", "Gracias", "Hasta luego"
 
-Usuario dice: "Hola buenos días"
-Respuesta: {"clasificacion": "chat", "confianza": 0.99, "razonamiento": "Saludo casual"}
+═══════════════════════════════════════════════════════════════
+REGLAS DE CLASIFICACIÓN
+═══════════════════════════════════════════════════════════════
 
-Usuario dice: "Recuérdame el cumpleaños de María"
-Respuesta: {"clasificacion": "personal", "confianza": 0.97, "razonamiento": "Evento personal"}"""
+⚠️ IMPORTANTE:
 
-    user_prompt = f"""Mensaje del usuario: "{mensaje_usuario}"
+• Pacientes externos SOLO pueden tener "solicitud_cita_paciente" o "chat"
+• Doctores pueden tener cualquier categoría
+• Si dudas entre dos categorías, usa la más específica
+• Confianza alta (>0.9) solo si estás muy seguro
+
+═══════════════════════════════════════════════════════════════
+EJEMPLOS COMPLETOS
+═══════════════════════════════════════════════════════════════
+
+Entrada: "Quiero agendar una cita"
+Usuario: paciente_externo
+Salida: {"clasificacion": "solicitud_cita_paciente", "confianza": 0.98, "razonamiento": "Paciente solicita cita directamente"}
+
+Entrada: "¿Cómo está mi paciente Juan Pérez?"
+Usuario: doctor
+Salida: {"clasificacion": "medica", "confianza": 0.99, "razonamiento": "Doctor pregunta por paciente específico"}
+
+Entrada: "Recuérdame el cumpleaños de mi esposa"
+Usuario: doctor
+Salida: {"clasificacion": "personal", "confianza": 0.95, "razonamiento": "Evento personal no relacionado con medicina"}
+
+Entrada: "Hola buenos días"
+Usuario: paciente_externo
+Salida: {"clasificacion": "chat", "confianza": 0.99, "razonamiento": "Saludo casual sin intención específica"}
+
+Entrada: "Gracias por la información"
+Usuario: doctor
+Salida: {"clasificacion": "chat", "confianza": 0.97, "razonamiento": "Agradecimiento general"}
+
+Entrada: "Necesito ver a María García hoy"
+Usuario: doctor
+Salida: {"clasificacion": "medica", "confianza": 0.96, "razonamiento": "Doctor solicita atender paciente específico"}"""
+
+    user_prompt = f"""Clasifica este mensaje:
+
+Mensaje: "{mensaje_usuario}"
 Tipo de usuario: {tipo_usuario}
 
-Clasifica este mensaje en la categoría correcta. Responde SOLO con el JSON."""
+Analiza el mensaje y responde con la clasificación correcta."""
 
     return [
         SystemMessage(content=system_prompt),
         HumanMessage(content=user_prompt)
     ]
-
-
-def parsear_respuesta_llm(respuesta: str) -> Dict:
-    """
-    Parsea respuesta del LLM a diccionario
-    
-    Args:
-        respuesta: String del LLM (JSON esperado)
-        
-    Returns:
-        Dict con clasificacion, confianza, razonamiento
-    """
-    try:
-        # Limpiar respuesta
-        respuesta = respuesta.strip()
-        
-        # Extraer JSON si está envuelto en markdown
-        if "```json" in respuesta:
-            respuesta = respuesta.split("```json")[1].split("```")[0].strip()
-        elif "```" in respuesta:
-            respuesta = respuesta.split("```")[1].split("```")[0].strip()
-        
-        # Parsear JSON
-        resultado = json.loads(respuesta)
-        
-        # Validar campos requeridos
-        if "clasificacion" not in resultado:
-            raise ValueError("Falta campo 'clasificacion'")
-        
-        # Valores por defecto
-        return {
-            "clasificacion": resultado["clasificacion"],
-            "confianza": resultado.get("confianza", 0.8),
-            "razonamiento": resultado.get("razonamiento", "Sin razonamiento")
-        }
-    
-    except (json.JSONDecodeError, ValueError) as e:
-        logger.error(f"❌ Error parseando respuesta LLM: {e}")
-        logger.error(f"    Respuesta recibida: {respuesta}")
-        
-        # Fallback: clasificar como chat
-        return {
-            "clasificacion": "chat",
-            "confianza": 0.5,
-            "razonamiento": "Error en parseo, clasificado como chat por defecto"
-        }
 
 
 def validar_clasificacion_por_tipo_usuario(
@@ -236,24 +284,9 @@ def registrar_clasificacion_bd(
         # No fallar el flujo principal si falla el registro
 
 
-def nodo_filtrado_inteligente(state: WhatsAppAgentState) -> Dict:
+def nodo_filtrado_inteligente(state: WhatsAppAgentState) -> Command:
     """
     Nodo de filtrado inteligente con LLM
-    
-    Flujo:
-    1. Extrae último mensaje del usuario
-    2. Construye prompt de clasificación
-    3. Llama a LLM (DeepSeek con fallback a Claude)
-    4. Parsea respuesta
-    5. Valida según tipo de usuario
-    6. Registra en BD para auditoría
-    7. Actualiza state
-    
-    Args:
-        state: WhatsAppAgentState
-        
-    Returns:
-        Dict con actualizaciones del state
     """
     logger.info("\n" + "=" * 70)
     logger.info("🔍 NODO: FILTRADO INTELIGENTE")
@@ -265,6 +298,19 @@ def nodo_filtrado_inteligente(state: WhatsAppAgentState) -> Dict:
     messages = state.get("messages", [])
     tipo_usuario = state.get("tipo_usuario", "paciente_externo")
     user_id = state.get("user_id", "unknown")
+    estado_conversacion = state.get("estado_conversacion", "inicial")  # ✅ NUEVO
+    
+    # ✅ NUEVA VALIDACIÓN: Si hay flujo activo, dejar pasar sin clasificar
+    if estado_conversacion in ESTADOS_FLUJO_ACTIVO:
+        logger.info(f"   🔄 Flujo activo detectado (estado: {estado_conversacion}) - Saltando clasificación")
+        
+        # Determinar siguiente nodo según estado
+        goto = MAPEO_ESTADO_A_NODO.get(estado_conversacion, "generacion_resumen")
+        
+        return Command(
+            update={'requiere_clasificacion_llm': False},
+            goto=goto
+        )
     
     # Extraer último mensaje
     ultimo_mensaje = ""
@@ -278,10 +324,13 @@ def nodo_filtrado_inteligente(state: WhatsAppAgentState) -> Dict:
     
     if not ultimo_mensaje:
         logger.warning("⚠️  No se encontró mensaje del usuario")
-        return {
-            "clasificacion_mensaje": "chat",
-            "confianza_clasificacion": 0.5
-        }
+        return Command(
+            update={
+                "clasificacion_mensaje": "chat",
+                "confianza_clasificacion": 0.5
+            },
+            goto="generacion_resumen"
+        )
     
     logger.info(f"📝 Mensaje: {ultimo_mensaje[:100]}...")
     logger.info(f"👤 Tipo usuario: {tipo_usuario}")
@@ -291,12 +340,10 @@ def nodo_filtrado_inteligente(state: WhatsAppAgentState) -> Dict:
     
     # Llamar a LLM con fallback
     modelo_usado = "deepseek"
-    hubo_fallback = False
-    razon_fallback = None
     
     try:
-        logger.info("🤖 Llamando a DeepSeek...")
-        respuesta_llm = llm_primary.invoke(prompt_messages)
+        logger.info("🤖 Llamando a DeepSeek con structured output...")
+        resultado: ClasificacionResponse = llm_primary.invoke(prompt_messages)
         modelo_usado = "deepseek"
     
     except Exception as e:
@@ -304,26 +351,26 @@ def nodo_filtrado_inteligente(state: WhatsAppAgentState) -> Dict:
         logger.info("🔄 Intentando con Claude (fallback)...")
         
         try:
-            respuesta_llm = llm_fallback.invoke(prompt_messages)
+            resultado: ClasificacionResponse = llm_fallback.invoke(prompt_messages)
             modelo_usado = "claude"
-            hubo_fallback = True
-            razon_fallback = str(e)[:200]
         
         except Exception as e2:
             logger.error(f"❌ Ambos LLMs fallaron: {e2}")
             
             # Fallback final: clasificar como chat
-            return {
-                "clasificacion_mensaje": "chat",
-                "confianza_clasificacion": 0.3
-            }
+            return Command(
+                update={
+                    "clasificacion_mensaje": "chat",
+                    "confianza_clasificacion": 0.3,
+                    "modelo_clasificacion_usado": "fallback"
+                },
+                goto="generacion_resumen"
+            )
     
-    # Parsear respuesta
-    resultado = parsear_respuesta_llm(respuesta_llm.content)
-    
-    clasificacion = resultado["clasificacion"]
-    confianza = resultado["confianza"]
-    razonamiento = resultado["razonamiento"]
+    # ✅ Ya no necesitamos parsear - Pydantic lo hizo
+    clasificacion = resultado.clasificacion
+    confianza = resultado.confianza
+    razonamiento = resultado.razonamiento
     
     logger.info(f"📊 Clasificación: {clasificacion}")
     logger.info(f"💯 Confianza: {confianza}")
@@ -357,41 +404,30 @@ def nodo_filtrado_inteligente(state: WhatsAppAgentState) -> Dict:
         herramientas_seleccionadas=[]
     )
     
-    logger.info("✅ Filtrado inteligente completado\n")
-    
-    # Retornar actualizaciones del state
-    return {
-        "clasificacion_mensaje": clasificacion,
-        "confianza_clasificacion": confianza,
-        "modelo_clasificacion_usado": modelo_usado,
-        "tiempo_clasificacion_ms": tiempo_ms
+    # ✅ NUEVO: Determinar siguiente nodo según clasificación
+    destinos = {
+        "medica": "recuperacion_medica",
+        "personal": "recuperacion_episodica",
+        "solicitud_cita_paciente": "recepcionista",
+        "chat": "generacion_resumen"
     }
-
+    
+    goto = destinos.get(clasificacion, "generacion_resumen")
+    
+    logger.info(f"✅ Filtrado completado → Siguiente: {goto}\n")
+    
+    # ✅ Retornar Command (no Dict)
+    return Command(
+        update={
+            "clasificacion_mensaje": clasificacion,
+            "confianza_clasificacion": confianza,
+            "modelo_clasificacion_usado": modelo_usado,
+            "tiempo_clasificacion_ms": tiempo_ms
+        },
+        goto=goto
+    )
 
 # Wrapper para compatibilidad con grafo
-def nodo_filtrado_inteligente_wrapper(state: WhatsAppAgentState) -> WhatsAppAgentState:
-    """
-    Wrapper que mantiene la firma esperada por el grafo
-    """
-    try:
-        # Llamar al nodo principal
-        resultado = nodo_filtrado_inteligente(state)
-        
-        # Retornar solo las actualizaciones del estado (no el estado completo)
-        return {
-            "clasificacion_mensaje": resultado.get("clasificacion_mensaje", "chat"),
-            "confianza_clasificacion": resultado.get("confianza_clasificacion", 0.0),
-            "modelo_clasificacion_usado": resultado.get("modelo_clasificacion_usado", "fallback"),
-            "tiempo_clasificacion_ms": resultado.get("tiempo_clasificacion_ms", 0)
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Error en nodo filtrado inteligente: {e}")
-
-        # Respuesta de fallback
-        return {
-            "clasificacion_mensaje": "chat",
-            "confianza_clasificacion": 0.0,
-            "modelo_clasificacion_usado": "fallback_error",
-            "tiempo_clasificacion_ms": 0
-        }
+def nodo_filtrado_inteligente_wrapper(state: WhatsAppAgentState) -> Command:
+    """Wrapper para LangGraph - retorna Command directamente."""
+    return nodo_filtrado_inteligente(state)

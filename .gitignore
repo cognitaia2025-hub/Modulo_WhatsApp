@@ -28,6 +28,7 @@ Thumbs.db
 !package.json
 !package-lock.json
 !tsconfig.json
+!langgraph.json
 secrets/
 credentials/
 *.key

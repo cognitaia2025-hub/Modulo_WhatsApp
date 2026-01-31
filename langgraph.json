@@ -1,0 +1,11 @@
+{
+  "graphs": {
+    "whatsapp-production": {
+      "path": "./src/graph_whatsapp.py:crear_grafo_whatsapp",
+      "description": "Grafo principal de WhatsApp con todos los nodos (Maya + Router + Herramientas)"
+    }
+  },
+  "env": ".env",
+  "python_version": "3.11",
+  "dependencies": ["."]
+}

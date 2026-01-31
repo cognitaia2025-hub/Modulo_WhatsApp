@@ -1,0 +1,16 @@
+id,doctor_id,paciente_id,paciente_nombre,fecha_hora_inicio,estado,motivo_consulta
+1,1,101,Paciente 1,2026-01-31 08:30:00,completada,Consulta
+2,1,102,Paciente 2,2026-01-31 09:00:00,completada,Consulta
+3,1,103,Paciente 3,2026-01-31 09:30:00,completada,Consulta
+4,1,104,Paciente 4,2026-01-31 10:00:00,completada,Consulta
+5,1,105,Paciente 5,2026-01-31 10:30:00,completada,Consulta
+6,1,106,Paciente 6,2026-01-31 11:00:00,agendada,Consulta
+7,1,107,Paciente 7,2026-01-31 11:30:00,agendada,Consulta
+8,1,108,Paciente 8,2026-01-31 14:00:00,agendada,Consulta
+9,1,109,Paciente 9,2026-01-31 14:30:00,agendada,Consulta
+10,1,110,Paciente 10,2026-01-31 15:00:00,agendada,Consulta
+11,1,111,Paciente 11,2026-01-31 15:30:00,agendada,Consulta
+12,1,112,Paciente 12,2026-01-31 16:00:00,agendada,Consulta
+13,1,113,Paciente 13,2026-01-31 16:30:00,agendada,Consulta
+14,1,114,Paciente 14,2026-01-31 17:00:00,agendada,Consulta
+15,1,115,Paciente 15,2026-01-31 17:30:00,agendada,Consulta

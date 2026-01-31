@@ -205,7 +205,7 @@ def recuperar_mensajes_checkpointer(thread_id: str, checkpointer) -> tuple:
         checkpointer: Instancia de PostgresSaver
         
     Returns:
-        Tupla (mensajes: list, estado_conversacion: str)
+        Tuple (mensajes: list, estado_conversacion: str)
     """
     try:
         # Configuración para recuperar del checkpointer

@@ -273,7 +273,7 @@ def test_cache_preserva_estado_conversacion(limpiar_sesiones_test):
         with patch('src.nodes.cache_sesion_node.actualizar_actividad_sesion') as mock_actualizar:
             mock_actualizar.return_value = True
             
-            # Mensaje: Recuperar sesión con estado conversacional
+            # Create state with new message to trigger session recovery with conversation state
             state = {
                 'user_id': user_id,
                 'messages': [HumanMessage(content="La opción B")],

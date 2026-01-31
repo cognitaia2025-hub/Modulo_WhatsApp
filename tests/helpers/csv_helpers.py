@@ -61,10 +61,10 @@ def crear_resumen_dia_desde_csv(df: pd.DataFrame) -> str:
     
     # Lista de pacientes
     resumen += "\n\n👥 PACIENTES DEL DÍA:"
-    for idx, row in df.iterrows():
+    for numero, (idx, row) in enumerate(df.iterrows(), start=1):
         hora = row['fecha_hora_inicio'].split()[1][:5]
         emoji = "✓" if row['estado'] == "completada" else "⏳" if row['estado'] == "agendada" else "✗"
-        resumen += f"\n{idx+1}. {row['paciente_nombre']} - {hora} {emoji}"
+        resumen += f"\n{numero}. {row['paciente_nombre']} - {hora} {emoji}"
     
     return resumen
 

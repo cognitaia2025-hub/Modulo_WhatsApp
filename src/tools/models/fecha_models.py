@@ -8,6 +8,10 @@ from pydantic import BaseModel, Field, validator
 from datetime import datetime, time, timedelta
 from typing import Optional
 
+# Constantes de configuración de la clínica
+CLINIC_CLOSED_DAYS = ['tuesday', 'wednesday']  # Días de cierre de la clínica
+MAX_ADVANCE_DAYS = 90  # Máximo de días para agendar por adelantado
+
 
 class FechaCita(BaseModel):
     """
@@ -45,7 +49,7 @@ class FechaCita(BaseModel):
             )
         
         # No más de 3 meses adelante
-        max_fecha = hoy + timedelta(days=90)
+        max_fecha = hoy + timedelta(days=MAX_ADVANCE_DAYS)
         if fecha > max_fecha:
             raise ValueError(
                 f"No se pueden agendar citas con más de 3 meses de anticipación. "
@@ -54,7 +58,7 @@ class FechaCita(BaseModel):
         
         # No agendar martes ni miércoles (clínica cerrada)
         dia_semana = fecha.strftime('%A').lower()
-        if dia_semana in ['tuesday', 'wednesday']:
+        if dia_semana in CLINIC_CLOSED_DAYS:
             dias_texto = 'martes' if dia_semana == 'tuesday' else 'miércoles'
             raise ValueError(
                 f"La clínica no atiende los {dias_texto}. "

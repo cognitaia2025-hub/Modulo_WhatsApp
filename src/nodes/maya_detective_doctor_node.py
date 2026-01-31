@@ -342,8 +342,9 @@ def obtener_resumen_dia_doctor(doctor_id: int) -> str:
                     nombre, hora, motivo = proxima
                     hora_formateada = hora.strftime("%I:%M %p")
                     
-                    # Calcular tiempo restante
-                    diferencia = hora - ahora
+                    # Calcular tiempo restante - convertir hora de PostgreSQL a Pendulum
+                    hora_pendulum = pendulum.instance(hora, tz=tz)
+                    diferencia = hora_pendulum - ahora
                     minutos = int(diferencia.total_seconds() / 60)
                     
                     if minutos > 60:

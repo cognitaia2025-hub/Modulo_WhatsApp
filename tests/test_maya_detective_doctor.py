@@ -223,6 +223,10 @@ def test_maya_escala_fecha_futura(mock_info, mock_resumen, mock_llm, estado_base
     
     assert resultado.goto == "recuperacion_medica"
     assert resultado.update['clasificacion_mensaje'] == "medica"
+    # Verify that the LLM was called and would have received the date restriction in the prompt
+    assert mock_llm.invoke.called
+    # The reasoning should identify this as a future date query
+    assert "fecha futura" in mock_llm.invoke.return_value.razon.lower() or "requiere herramientas" in mock_llm.invoke.return_value.razon.lower()
 
 
 @patch('src.nodes.maya_detective_doctor_node.structured_llm_doctor')

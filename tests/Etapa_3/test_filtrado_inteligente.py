@@ -182,8 +182,10 @@ def test_registro_incluye_tiempo_procesamiento(estado_con_doctor, mock_llm_clasi
     resultado = nodo_filtrado_inteligente(estado_con_doctor)
     
     assert "tiempo_clasificacion_ms" in resultado.update
-    # Time can be 0 or positive in tests with mocks
+    # With mocks, time can be 0 (very fast) or positive
+    # In production with real LLM calls, it will always be > 0
     assert resultado.update["tiempo_clasificacion_ms"] >= 0
+    assert isinstance(resultado.update["tiempo_clasificacion_ms"], int)
 
 
 # ============================================================================
@@ -288,8 +290,13 @@ def test_timeout_reducido():
     from src.nodes.filtrado_inteligente_node import llm_primary_base
     
     # Check request_timeout attribute (actual attribute name in langchain)
-    assert hasattr(llm_primary_base, 'request_timeout') or hasattr(llm_primary_base, 'timeout')
-    timeout_val = getattr(llm_primary_base, 'request_timeout', getattr(llm_primary_base, 'timeout', None))
+    if hasattr(llm_primary_base, 'request_timeout'):
+        timeout_val = llm_primary_base.request_timeout
+    elif hasattr(llm_primary_base, 'timeout'):
+        timeout_val = llm_primary_base.timeout
+    else:
+        timeout_val = None
+    
     assert timeout_val == 10.0, f"Expected timeout 10.0, got {timeout_val}"
 
 
@@ -297,7 +304,15 @@ def test_timeout_fallback_reducido():
     """Test 1.20: Verifica que timeout de Claude sea 10s (no 20s)."""
     from src.nodes.filtrado_inteligente_node import llm_fallback_base
     
-    # Check request_timeout attribute (actual attribute name in langchain)
-    # For Anthropic, timeout may be stored differently
-    # Just verify that the LLM was configured with timeout
-    assert llm_fallback_base is not None
+    # Check request_timeout or timeout attribute
+    if hasattr(llm_fallback_base, 'request_timeout'):
+        timeout_val = llm_fallback_base.request_timeout
+    elif hasattr(llm_fallback_base, 'timeout'):
+        timeout_val = llm_fallback_base.timeout
+    else:
+        # For Anthropic, timeout configuration may be internal
+        # At least verify the LLM is configured
+        assert llm_fallback_base is not None
+        return
+    
+    assert timeout_val == 10.0, f"Expected timeout 10.0, got {timeout_val}"

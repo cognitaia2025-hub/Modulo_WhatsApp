@@ -99,6 +99,25 @@ llm_fallback = llm_fallback_base.with_structured_output(
 )
 
 
+# ==================== CONSTANTES ====================
+
+# Estados conversacionales que requieren saltar clasificación
+ESTADOS_FLUJO_ACTIVO = [
+    'recolectando_fecha',
+    'recolectando_hora', 
+    'esperando_confirmacion',
+    'mostrando_opciones'
+]
+
+# Mapeo de estados a nodos destino
+MAPEO_ESTADO_A_NODO = {
+    'recolectando_fecha': 'recepcionista',
+    'recolectando_hora': 'recepcionista',
+    'esperando_confirmacion': 'recepcionista',
+    'mostrando_opciones': 'generacion_resumen'
+}
+
+
 def construir_prompt_clasificacion(mensaje_usuario: str, tipo_usuario: str) -> list:
     """
     Construye prompt mejorado para clasificación de mensajes
@@ -282,15 +301,11 @@ def nodo_filtrado_inteligente(state: WhatsAppAgentState) -> Command:
     estado_conversacion = state.get("estado_conversacion", "inicial")  # ✅ NUEVO
     
     # ✅ NUEVA VALIDACIÓN: Si hay flujo activo, dejar pasar sin clasificar
-    if estado_conversacion in ['recolectando_fecha', 'recolectando_hora', 
-                                'esperando_confirmacion', 'mostrando_opciones']:
+    if estado_conversacion in ESTADOS_FLUJO_ACTIVO:
         logger.info(f"   🔄 Flujo activo detectado (estado: {estado_conversacion}) - Saltando clasificación")
         
         # Determinar siguiente nodo según estado
-        if 'recolectando' in estado_conversacion or 'esperando' in estado_conversacion:
-            goto = "recepcionista"
-        else:
-            goto = "generacion_resumen"
+        goto = MAPEO_ESTADO_A_NODO.get(estado_conversacion, "generacion_resumen")
         
         return Command(
             update={'requiere_clasificacion_llm': False},

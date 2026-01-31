@@ -79,6 +79,7 @@ from src.nodes.identificacion_usuario_node import nodo_identificacion_usuario_wr
 from src.nodes.cache_sesion_node import nodo_cache_sesion_wrapper
 from src.nodes.router_identidad_node import nodo_router_identidad_wrapper
 from src.nodes.maya_detective_paciente_node import nodo_maya_detective_paciente_wrapper
+from src.nodes.maya_detective_doctor_node import nodo_maya_detective_doctor_wrapper
 from src.nodes.filtrado_inteligente_node import nodo_filtrado_inteligente_wrapper
 from src.nodes.recuperacion_episodica_node import nodo_recuperacion_episodica_wrapper
 from src.nodes.recuperacion_medica_node import nodo_recuperacion_medica_wrapper
@@ -236,6 +237,9 @@ def crear_grafo_whatsapp() -> StateGraph:
     # N2A: Maya Detective de Intención (para pacientes externos)
     workflow.add_node("maya_detective_paciente", nodo_maya_detective_paciente_wrapper)
     
+    # N2B: Maya Detective de Intención (para doctores)
+    workflow.add_node("maya_detective_doctor", nodo_maya_detective_doctor_wrapper)
+    
     # N2-LLM: Filtrado Inteligente (clasificación LLM - solo casos ambiguos)
     workflow.add_node("filtrado_inteligente", nodo_filtrado_inteligente_wrapper)
     
@@ -278,6 +282,7 @@ def crear_grafo_whatsapp() -> StateGraph:
     # -------------------- NUEVO: Routing desde Router Identidad --------------------
     def decidir_desde_router(state: WhatsAppAgentState) -> Literal[
         "maya_detective_paciente",  # NUEVO - para pacientes externos
+        "maya_detective_doctor",    # NUEVO - para doctores
         "recepcionista",
         "filtrado_inteligente",  # LLM clasificador (solo casos ambiguos)
         "recuperacion_medica",
@@ -287,17 +292,25 @@ def crear_grafo_whatsapp() -> StateGraph:
         """
         Decide la ruta según resultado del router de identidad.
         
-        PRIORIDAD MÁXIMA: Pacientes externos → Maya Detective primero
+        PRIORIDAD MÁXIMA: 
+        - Pacientes externos → Maya Detective Paciente primero
+        - Doctores → Maya Detective Doctor primero (si no es ruta médica directa)
         Si requiere_clasificacion_llm=True → ir a filtrado_inteligente (LLM)
         Si no → ir directamente a la ruta determinada
         """
         
         tipo_usuario = state.get('tipo_usuario', '')
+        ruta = state.get('ruta_siguiente', 'generacion_resumen')
         
         # NUEVO: Pacientes externos pasan por Maya Detective primero
         if tipo_usuario == 'paciente_externo':
-            logger.info("   → Ruta: MAYA DETECTIVE (paciente externo)")
+            logger.info("   → Ruta: MAYA DETECTIVE PACIENTE (paciente externo)")
             return "maya_detective_paciente"
+        
+        # NUEVO: Doctores externos van primero a Maya (excepto si ya tienen ruta médica clara)
+        if tipo_usuario == 'doctor' and ruta != 'recuperacion_medica':
+            logger.info("   → Ruta: MAYA DETECTIVE DOCTOR (doctor)")
+            return 'maya_detective_doctor'
         
         if state.get('requiere_clasificacion_llm', False):
             # Solo 2% de casos - mensajes genuinamente ambiguos
@@ -305,7 +318,6 @@ def crear_grafo_whatsapp() -> StateGraph:
             return "filtrado_inteligente"
         
         # 98% de casos - ruta directa sin LLM
-        ruta = state.get('ruta_siguiente', 'generacion_resumen')
         logger.info(f"   → Ruta directa: {ruta} (sin LLM)")
         
         # Mapear rutas a nodos del grafo
@@ -326,6 +338,7 @@ def crear_grafo_whatsapp() -> StateGraph:
         decidir_desde_router,
         {
             "maya_detective_paciente": "maya_detective_paciente",  # NUEVO
+            "maya_detective_doctor": "maya_detective_doctor",      # NUEVO
             "recepcionista": "recepcionista",
             "filtrado_inteligente": "filtrado_inteligente",
             "recuperacion_medica": "recuperacion_medica",

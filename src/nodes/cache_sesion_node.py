@@ -317,6 +317,10 @@ def nodo_cache_sesion(state: WhatsAppAgentState, checkpointer=None) -> WhatsAppA
         state['session_id'] = thread_id
         state['sesion_expirada'] = True  # Marcar para auto-resumen
         
+        # ✅ MEJORA 4: Resetear estado_conversacion si sesión expiró
+        state['estado_conversacion'] = 'inicial'
+        logger.info(f"    🔄 Estado conversacional reseteado a 'inicial' (sesión expirada)")
+        
         logger.info(f"    ✓ Nueva sesión: {thread_id}")
     
     # ========================================

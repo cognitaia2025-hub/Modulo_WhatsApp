@@ -508,7 +508,7 @@ def nodo_maya_detective_doctor(state: WhatsAppAgentState) -> Command:
         if doctor_id <= 0:
             raise ValueError("doctor_id debe ser > 0")
     except (ValueError, TypeError) as e:
-        logger.error(f"❌ doctor_id inválido: {doctor_id} ({type(doctor_id)})")
+        logger.error(f"❌ doctor_id inválido: {doctor_id} (tipo: {type(doctor_id).__name__}). Error: {e}")
         return Command(
             update={'requiere_clasificacion_llm': True},
             goto="filtrado_inteligente"

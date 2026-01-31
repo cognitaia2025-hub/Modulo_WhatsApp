@@ -5,13 +5,16 @@ Asistente conversacional que maneja consultas básicas de doctores sin activar
 flujo completo. Tiene acceso a estadísticas del día y puede responder preguntas
 rápidas sin llamar a herramientas complejas.
 
-TODO - OPTIMIZACIONES FUTURAS:
-- [ ] Implementar connection pool para PostgreSQL (psycopg_pool)
-- [ ] Mover queries a async con asyncpg para alta concurrencia
-- [ ] Cachear resumen_dia por 5 minutos (Redis) para reducir queries
+MEJORAS TÉCNICAS APLICADAS:
+✅ Validación pre-vuelo de doctor_id
+✅ Bloqueo de recálculo en prompt
+✅ Tiempo inyectable para tests
+✅ Manejo robusto de errores
 
-Actualmente usa psycopg síncrono directo. 
-Esto es OK para <100 mensajes/min, pero necesitará pool para producción alta.
+TODO - OPTIMIZACIONES FUTURAS:
+- [ ] Connection pool PostgreSQL (psycopg_pool)
+- [ ] Queries async con asyncpg
+- [ ] Cache de resumen_dia (Redis, TTL 5min)
 """
 
 import logging
@@ -191,21 +194,38 @@ TUS RESPONSABILIDADES
    ❌ "¿A qué hora es Juan?" → ESCALAR (buscar necesario)
 
 ═══════════════════════════════════════════════════════════════
-📊 USO DEL RESUMEN DEL DÍA
+📊 USO DEL RESUMEN DEL DÍA - FORMATO ESTRICTO
 ═══════════════════════════════════════════════════════════════
 
-Usa los números tal cual, NO los recalcules:
-• ESTADÍSTICAS: Usa completadas, pendientes, total directamente
-• PRÓXIMA CITA: Usa el tiempo ya calculado ("en X min")
-• PACIENTES DEL DÍA: Solo menciona si están en la lista visible
+⚠️ IMPORTANTE: NO RECALCULES NADA
+
+El resumen ya tiene TODO calculado. Usa los valores EXACTOS:
+
+1️⃣ **ESTADÍSTICAS** → Usa números tal cual
+   ✅ "Tienes 8 citas" (del resumen)
+   ❌ "Tienes aproximadamente 8 citas" (inventado)
+
+2️⃣ **PRÓXIMA CITA - TIEMPO** → Copia el tiempo exacto
+   ✅ "María a las 2:30pm (en 45 min)" (del resumen)
+   ❌ "María a las 2:30pm (calculando... en 47 min)" (recalculado)
+   
+   Si el resumen dice "(en 15 min)", escribe EXACTAMENTE eso.
+   NO uses {hora_actual} para recalcular.
+   NO consultes tu reloj interno.
+   
+3️⃣ **LISTA DE PACIENTES** → Solo menciona si están visibles
+   ✅ Mencionar pacientes que aparecen en "PACIENTES DEL DÍA"
+   ❌ Inventar pacientes que no están en la lista
+
+**Regla absoluta:** Eres un MENSAJERO del resumen, no un CALCULADOR.
 
 ═══════════════════════════════════════════════════════════════
 REGLAS DE CONVERSACIÓN
 ═══════════════════════════════════════════════════════════════
 
 1. Personaliza con el nombre del doctor
-2. Usa datos del RESUMEN DEL DÍA sin recalcular
-3. Si no tienes la info en el resumen → ESCALA
+2. Copia datos del RESUMEN sin modificar
+3. Si no está en el resumen → ESCALA
 4. Respuestas CORTAS: 3-4 líneas máx
 5. Un emoji por mensaje (opcional)
 
@@ -218,8 +238,8 @@ Estado: {estado_conversacion}
 SI: ejecutando_herramienta, esperando_confirmacion, procesando
 → accion: "dejar_pasar"
 
-SI: herramienta_completada, completado
-→ accion: "responder_directo" (confirmar/despedir)
+SI: herramienta_completada, completado, inicial
+→ accion: "responder_directo" o "escalar_procedimental" según corresponda
 
 ═══════════════════════════════════════════════════════════════
 EJEMPLOS
@@ -233,6 +253,7 @@ Maya: "Tienes 8 citas. Has completado 3 y te quedan 5"
 
 Usuario: "¿Quién sigue?"
 Maya: "María García a las 2:30pm (en 45 min)"
+(✅ Usa el tiempo EXACTO del resumen)
 
 Usuario: "¿Cuántas tengo mañana?"
 Maya: ESCALAR (fecha futura)
@@ -242,15 +263,12 @@ Maya: ESCALAR (búsqueda específica)
 
 Usuario: "¿Qué diagnóstico tiene María?"
 Maya: ESCALAR (historial médico)
-
-Usuario: "Cancela mi cita de las 5pm"
-Maya: ESCALAR (modificar agenda)
 """
 
 
 # ==================== FUNCIONES AUXILIARES ====================
 
-def obtener_resumen_dia_doctor(doctor_id: int) -> str:
+def obtener_resumen_dia_doctor(doctor_id: int, ahora: Optional[pendulum.DateTime] = None) -> str:
     """
     Obtiene resumen rápido del día del doctor.
     
@@ -261,6 +279,7 @@ def obtener_resumen_dia_doctor(doctor_id: int) -> str:
     
     Args:
         doctor_id: ID del doctor
+        ahora: Tiempo actual (opcional, para tests)
         
     Returns:
         String formateado con resumen del día
@@ -268,7 +287,10 @@ def obtener_resumen_dia_doctor(doctor_id: int) -> str:
     try:
         DATABASE_URL = os.getenv("DATABASE_URL")
         tz = pendulum.timezone('America/Tijuana')
-        ahora = pendulum.now(tz)
+        
+        # ✅ MEJORA 3: Permitir inyectar tiempo para tests
+        if ahora is None:
+            ahora = pendulum.now(tz)
         
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
@@ -457,35 +479,44 @@ def nodo_maya_detective_doctor(state: WhatsAppAgentState) -> Command:
     Similar a Maya Paciente pero con capacidades para responder
     stats del día sin activar herramientas complejas.
     
-    Flujo:
-    1. Obtener info del doctor (nombre, especialidad)
-    2. Obtener resumen del día (stats, próxima cita, lista pacientes)
-    3. Obtener fecha/hora actual
-    4. Construir prompt con toda la información
-    5. Llamar LLM con structured output
-    6. Retornar Command con update + goto
-    
-    Args:
-        state: WhatsAppAgentState con doctor_id, messages, estado_conversacion
-        
-    Returns:
-        Command con updates del state y siguiente nodo (goto)
+    MEJORAS APLICADAS:
+    ✅ Validación pre-vuelo de doctor_id
+    ✅ Manejo robusto de errores
+    ✅ Logging detallado
     """
     logger.info("\n" + "=" * 70)
     logger.info("👨‍⚕️ NODO 2B: MAYA - DETECTIVE DOCTOR")
     logger.info("=" * 70)
     
-    # Extraer datos del state
+    # ✅ MEJORA 1: Validación pre-vuelo de doctor_id
     doctor_id = state.get('doctor_id')
-    mensaje_usuario = obtener_ultimo_mensaje(state)
-    estado_conversacion = state.get('estado_conversacion', 'inicial')
     
-    if not doctor_id:
-        logger.warning("⚠️  No hay doctor_id - escalando a clasificador")
+    if doctor_id is None:
+        logger.error("❌ ERROR CRÍTICO: doctor_id es None - No se puede continuar")
+        logger.error("   Estado recibido: %s", {k: v for k, v in state.items() if k != 'messages'})
+        return Command(
+            update={
+                'requiere_clasificacion_llm': True,
+                'error_maya': 'doctor_id_missing'
+            },
+            goto="filtrado_inteligente"
+        )
+    
+    # Validar que sea un ID válido (entero > 0)
+    try:
+        doctor_id = int(doctor_id)
+        if doctor_id <= 0:
+            raise ValueError("doctor_id debe ser > 0")
+    except (ValueError, TypeError) as e:
+        logger.error(f"❌ doctor_id inválido: {doctor_id} ({type(doctor_id)})")
         return Command(
             update={'requiere_clasificacion_llm': True},
             goto="filtrado_inteligente"
         )
+    
+    # Extraer mensaje
+    mensaje_usuario = obtener_ultimo_mensaje(state)
+    estado_conversacion = state.get('estado_conversacion', 'inicial')
     
     if not mensaje_usuario:
         logger.warning("⚠️  Sin mensaje del usuario")
@@ -568,11 +599,12 @@ def nodo_maya_detective_doctor(state: WhatsAppAgentState) -> Command:
         
     except Exception as e:
         logger.error(f"❌ Error en Maya Detective Doctor: {e}")
-        # Fallback: responder con error genérico
+        logger.exception("Stack trace completo:")
         return Command(
             update={
                 "messages": [AIMessage(content="Disculpa, ¿puedes repetir eso de otra forma?")],
-                "clasificacion_mensaje": "chat"
+                "clasificacion_mensaje": "chat",
+                "error_maya": str(e)
             },
             goto="generacion_resumen"
         )

@@ -330,16 +330,41 @@ def test_maya_deja_pasar_esperando_confirmacion(mock_info, mock_resumen, mock_ll
 # ==================== TESTS DE MANEJO DE ERRORES ====================
 
 def test_maya_sin_doctor_id():
-    """Maya maneja gracefully si no hay doctor_id."""
+    """✅ MEJORA 1: Valida que doctor_id es requerido."""
     estado = {
         'messages': [HumanMessage(content="Hola")],
         'tipo_usuario': 'doctor'
+        # doctor_id ausente
     }
     
     resultado = nodo_maya_detective_doctor(estado)
     
     assert resultado.goto == "filtrado_inteligente"
-    assert resultado.update['requiere_clasificacion_llm'] == True
+    assert resultado.update.get('requiere_clasificacion_llm') == True
+
+
+def test_maya_doctor_id_invalido():
+    """✅ MEJORA 1: Maneja doctor_id inválido."""
+    estado = {
+        'doctor_id': 'abc',  # String no convertible
+        'messages': [HumanMessage(content="Hola")]
+    }
+    
+    resultado = nodo_maya_detective_doctor(estado)
+    
+    assert resultado.goto == "filtrado_inteligente"
+
+
+def test_maya_doctor_id_negativo():
+    """✅ MEJORA 1: Rechaza doctor_id <= 0."""
+    estado = {
+        'doctor_id': -5,
+        'messages': [HumanMessage(content="Hola")]
+    }
+    
+    resultado = nodo_maya_detective_doctor(estado)
+    
+    assert resultado.goto == "filtrado_inteligente"
 
 
 def test_maya_sin_mensaje():
@@ -421,6 +446,34 @@ def test_obtener_info_doctor_no_existe(mock_connect):
     
     assert info['nombre_completo'] == 'Doctor'
     assert info['especialidad'] == 'Medicina General'
+
+
+# ==================== TESTS DE TIEMPO INYECTABLE ====================
+
+@patch('src.nodes.maya_detective_doctor_node.psycopg.connect')
+def test_resumen_con_tiempo_inyectado(mock_connect):
+    """✅ MEJORA 3: Tiempo inyectable para tests consistentes."""
+    import pendulum
+    
+    tz = pendulum.timezone('America/Tijuana')
+    # Fijar a 1:30 PM del 31 de enero 2026
+    mock_tiempo_fijo = pendulum.datetime(2026, 1, 31, 13, 30, tz=tz)
+    
+    # Mock de BD
+    mock_cursor = Mock()
+    mock_cursor.fetchone.side_effect = [
+        (8, 3, 5, 0),  # Stats
+        ('María García', mock_tiempo_fijo.add(hours=1), 'Consulta'),  # Próxima (2:30pm)
+        []  # Lista vacía
+    ]
+    mock_cursor.fetchall.return_value = []
+    mock_connect.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value = mock_cursor
+    
+    # Llamar con tiempo fijo
+    resumen = obtener_resumen_dia_doctor(1, ahora=mock_tiempo_fijo)
+    
+    # Verificar que el tiempo es "en 60 min" (no variable según hora real)
+    assert "en 60 min" in resumen or "en 1h 0min" in resumen
 
 
 # ==================== FIXTURES CSV ====================

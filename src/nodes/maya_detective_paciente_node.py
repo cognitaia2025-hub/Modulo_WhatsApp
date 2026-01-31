@@ -169,6 +169,72 @@ INFORMACIÓN DE LA CLÍNICA:
 
 FECHA Y HORA ACTUAL: {fecha_hora}
 
+═══════════════════════════════════════════════════════════════
+🗓️ MANEJO ESPECIAL: AGENDAMIENTO INCOMPLETO
+═══════════════════════════════════════════════════════════════
+
+⚠️ IMPORTANTE: Cuando detectes intención de agendar SIN detalles:
+
+SI el usuario dice:
+• "Quiero agendar una cita"
+• "Necesito hacer una cita"
+• "Quiero sacar cita"
+• (Sin mencionar día, fecha u hora)
+
+ENTONCES (accion: "responder_directo"):
+→ Pregunta: "¿Qué día y hora te gustaría tu cita? Puedes decirme ambos juntos 😊"
+→ NO escales todavía
+
+PERO SI el usuario ya dio detalles:
+• "Quiero agendar el martes a las 3pm" ✅ Tiene día + hora
+• "Necesito cita mañana" ✅ Tiene día
+• "A las 2 de la tarde" ✅ Tiene hora
+
+ENTONCES (accion: "escalar_procedimental"):
+→ Escala al Recepcionista con la info recolectada
+
+═══════════════════════════════════════════════════════════════
+🔄 DETECCIÓN DE FLUJO ACTIVO
+═══════════════════════════════════════════════════════════════
+
+Estado actual: {estado_conversacion}
+
+SI estado_conversacion es uno de estos:
+• recolectando_fecha
+• recolectando_hora
+• esperando_confirmacion
+• mostrando_opciones
+
+ENTONCES (accion: "dejar_pasar"):
+→ El Recepcionista ya está manejando la conversación
+→ NO interfieras, deja pasar el mensaje
+
+═══════════════════════════════════════════════════════════════
+EJEMPLOS DE CONVERSACIÓN MULTI-TURNO
+═══════════════════════════════════════════════════════════════
+
+CASO 1: Agendamiento sin detalles
+Usuario: "Quiero agendar una cita"
+Maya: accion="responder_directo"
+      respuesta="¿Qué día y hora te gustaría tu cita? Puedes decirme ambos 😊"
+
+Usuario: "El martes a las 3pm"
+Maya: accion="dejar_pasar" (estado_conversacion ya no es 'inicial')
+      → Recepcionista toma control
+
+CASO 2: Agendamiento completo desde inicio
+Usuario: "Necesito cita el jueves a las 10am"
+Maya: accion="escalar_procedimental"
+      → Recepcionista valida y agenda directamente
+
+CASO 3: Ya hay flujo activo
+estado_conversacion = "esperando_confirmacion"
+Usuario: "Sí, confírmala"
+Maya: accion="dejar_pasar"
+      → Recepcionista procesa confirmación
+
+═══════════════════════════════════════════════════════════════
+
 DECISIONES QUE DEBES TOMAR:
 
 1. **responder_directo**: Usa esta acción para:
@@ -189,6 +255,8 @@ DECISIONES QUE DEBES TOMAR:
    - esperando_confirmacion
    - mostrando_opciones
    - esperando_seleccion
+   - recolectando_fecha
+   - recolectando_hora
    (Esto significa que ya hay un flujo activo en curso)
 
 ESTADO ACTUAL DE CONVERSACIÓN: {estado_conversacion}
@@ -257,6 +325,15 @@ def nodo_maya_detective_paciente(state: WhatsAppAgentState) -> Command:
     
     # Obtener contexto del paciente
     contexto_paciente = obtener_contexto_paciente(user_id)
+    
+    # ✅ NUEVA VALIDACIÓN: Si Recepcionista está activo, dejar pasar
+    if estado_conversacion in ['recolectando_fecha', 'recolectando_hora', 
+                                'esperando_confirmacion', 'mostrando_opciones']:
+        logger.info(f"   🔄 Recepcionista activo (estado: {estado_conversacion}) - Dejando pasar")
+        return Command(
+            update={'requiere_clasificacion_llm': False},
+            goto="recepcionista"
+        )
     
     try:
         # Construir prompt para Maya

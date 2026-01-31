@@ -453,5 +453,58 @@ def test_clinica_info_completo():
     assert "Martes y Miércoles" in CLINICA_INFO['cerrado']
 
 
+# ==================== TESTS MULTI-TURNO AGENDAMIENTO ====================
+
+@patch('src.nodes.maya_detective_paciente_node.llm_structured')
+@patch('src.nodes.maya_detective_paciente_node.obtener_contexto_paciente')
+def test_maya_agendar_sin_detalles_pregunta(mock_contexto, mock_llm, state_base):
+    """Maya pregunta por fecha/hora cuando usuario dice 'quiero agendar' sin detalles."""
+    mock_contexto.return_value = {'nombre': None, 'tiene_citas': False}
+    mock_llm.invoke.return_value = MayaResponse(
+        accion="responder_directo",
+        respuesta="¿Qué día y hora te gustaría tu cita? Puedes decirme ambos 😊",
+        razon="Usuario quiere agendar pero no dio detalles"
+    )
+    
+    state_base['messages'] = [HumanMessage(content="Quiero agendar una cita")]
+    
+    resultado = nodo_maya_detective_paciente(state_base)
+    
+    assert resultado.goto == "generacion_resumen"
+    assert "día" in resultado.update['mensaje_final'].lower()
+    assert "hora" in resultado.update['mensaje_final'].lower()
+
+
+@patch('src.nodes.maya_detective_paciente_node.llm_structured')
+@patch('src.nodes.maya_detective_paciente_node.obtener_contexto_paciente')
+def test_maya_agendar_con_detalles_escala(mock_contexto, mock_llm, state_base):
+    """Maya escala cuando usuario da fecha Y hora."""
+    mock_contexto.return_value = {'nombre': None, 'tiene_citas': False}
+    mock_llm.invoke.return_value = MayaResponse(
+        accion="escalar_procedimental",
+        respuesta="",
+        razon="Usuario especificó día y hora completos"
+    )
+    
+    state_base['messages'] = [HumanMessage(content="Quiero agendar el martes a las 3pm")]
+    
+    resultado = nodo_maya_detective_paciente(state_base)
+    
+    assert resultado.goto == "recepcionista"
+    assert resultado.update['clasificacion_mensaje'] == 'solicitud_cita_paciente'
+
+
+def test_maya_detecta_estado_activo_recepcionista(state_base):
+    """Maya deja pasar mensaje si Recepcionista está activo."""
+    state_base['messages'] = [HumanMessage(content="El martes")]
+    state_base['estado_conversacion'] = 'recolectando_fecha'
+    
+    resultado = nodo_maya_detective_paciente(state_base)
+    
+    # Maya detecta que Recepcionista está recolectando datos
+    assert resultado.goto == "recepcionista"
+    assert resultado.update.get('requiere_clasificacion_llm') == False
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

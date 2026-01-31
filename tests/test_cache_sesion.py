@@ -234,11 +234,62 @@ def test_recuperacion_mensajes_con_checkpointer_mock(estado_base):
     # Ejecutar nodo con checkpointer mock
     # Nota: Este test verifica la lógica aunque el wrapper real no pasa checkpointer
     from src.nodes.cache_sesion_node import recuperar_mensajes_checkpointer
-    mensajes = recuperar_mensajes_checkpointer('thread_test_12345678', mock_checkpointer)
+    mensajes, estado_conversacion = recuperar_mensajes_checkpointer('thread_test_12345678', mock_checkpointer)
     
     # Verificar que recuperó mensajes
     assert len(mensajes) == 3
     assert mensajes[0].content == "Mensaje anterior 1"
+    # Verificar que retorna estado por defecto si no existe
+    assert estado_conversacion == 'inicial'
+
+
+def test_cache_preserva_estado_conversacion(limpiar_sesiones_test):
+    """Verifica que el cache preserve estado_conversacion entre mensajes."""
+    # Mock del checkpointer con estado_conversacion
+    mock_checkpointer = Mock()
+    mock_checkpointer.get.return_value = {
+        'channel_values': {
+            'messages': [
+                HumanMessage(content="Quiero cita"),
+                AIMessage(content="¿Qué tipo de cita necesitas?")
+            ],
+            'estado_conversacion': 'mostrando_opciones'
+        }
+    }
+    
+    user_id = '+526641234571'
+    thread_id = 'thread_526641234571_test123'
+    
+    # Mock buscar_sesion_activa para simular que hay una sesión activa
+    with patch('src.nodes.cache_sesion_node.buscar_sesion_activa') as mock_buscar:
+        mock_buscar.return_value = {
+            'thread_id': thread_id,
+            'last_activity': datetime.now(),
+            'messages_count': 2,
+            'hours_inactive': 0.5
+        }
+        
+        # Mock actualizar_actividad_sesion
+        with patch('src.nodes.cache_sesion_node.actualizar_actividad_sesion') as mock_actualizar:
+            mock_actualizar.return_value = True
+            
+            # Mensaje: Recuperar sesión con estado conversacional
+            state = {
+                'user_id': user_id,
+                'messages': [HumanMessage(content="La opción B")],
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            # Ejecutar nodo con checkpointer mock
+            resultado = nodo_cache_sesion(state, checkpointer=mock_checkpointer)
+            
+            # Verificar que recuperó el estado conversacional
+            assert resultado['estado_conversacion'] == 'mostrando_opciones'
+            assert resultado['sesion_expirada'] == False
+            assert resultado['session_id'] == thread_id
+            
+            # Verificar que recuperó mensajes previos
+            assert len(resultado['messages']) == 3  # 2 previos + 1 nuevo
 
 
 if __name__ == "__main__":

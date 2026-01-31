@@ -196,16 +196,16 @@ def limpiar_sesiones_antiguas() -> int:
         return 0
 
 
-def recuperar_mensajes_checkpointer(thread_id: str, checkpointer) -> list:
+def recuperar_mensajes_checkpointer(thread_id: str, checkpointer) -> tuple:
     """
-    Recupera mensajes previos del checkpointer de LangGraph.
+    Recupera mensajes previos Y estado conversacional del checkpointer.
     
     Args:
         thread_id: ID de la sesión
         checkpointer: Instancia de PostgresSaver
         
     Returns:
-        Lista de mensajes previos
+        Tupla (mensajes: list, estado_conversacion: str)
     """
     try:
         # Configuración para recuperar del checkpointer
@@ -216,15 +216,19 @@ def recuperar_mensajes_checkpointer(thread_id: str, checkpointer) -> list:
         
         if checkpoint and 'channel_values' in checkpoint:
             messages = checkpoint['channel_values'].get('messages', [])
+            estado_conversacion = checkpoint['channel_values'].get('estado_conversacion', 'inicial')
+            
             logger.info(f"    ✓ Recuperados {len(messages)} mensajes del checkpointer")
-            return messages
+            logger.info(f"    ✓ Estado conversación: {estado_conversacion}")
+            
+            return messages, estado_conversacion
         else:
-            logger.info(f"    ℹ️ No hay mensajes previos en checkpointer")
-            return []
+            logger.info(f"    ℹ️ No hay datos previos en checkpointer")
+            return [], 'inicial'
             
     except Exception as e:
-        logger.warning(f"⚠️ Error recuperando mensajes del checkpointer: {e}")
-        return []
+        logger.warning(f"⚠️ Error recuperando del checkpointer: {e}")
+        return [], 'inicial'
 
 
 # ==================== NODO PRINCIPAL ====================
@@ -281,13 +285,18 @@ def nodo_cache_sesion(state: WhatsAppAgentState, checkpointer=None) -> WhatsAppA
         
         # Recuperar mensajes previos del checkpointer
         if checkpointer:
-            mensajes_previos = recuperar_mensajes_checkpointer(thread_id, checkpointer)
+            mensajes_previos, estado_conversacion = recuperar_mensajes_checkpointer(thread_id, checkpointer)
             
             if mensajes_previos:
                 # Agregar mensajes previos ANTES de los mensajes actuales
                 # Esto mantiene el contexto conversacional
                 state['messages'] = mensajes_previos + state.get('messages', [])
                 logger.info(f"    📝 Contexto restaurado: {len(mensajes_previos)} mensajes previos")
+            
+            # Preservar estado conversacional si existe
+            if estado_conversacion != 'inicial':
+                state['estado_conversacion'] = estado_conversacion
+                logger.info(f"    🔄 Estado conversacional restaurado: {estado_conversacion}")
         
         # Actualizar sesión
         state['session_id'] = thread_id

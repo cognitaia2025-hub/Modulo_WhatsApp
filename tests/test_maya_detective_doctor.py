@@ -1,8 +1,11 @@
 """
 Tests para Nodo 2B: Maya Detective de Intención - Doctores
+
+Usa CSV fixtures en lugar de PostgreSQL real para tests más rápidos.
 """
 
 import pytest
+import pandas as pd
 from unittest.mock import Mock, patch
 from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.types import Command
@@ -13,6 +16,7 @@ from src.nodes.maya_detective_doctor_node import (
     obtener_info_doctor,
     MayaResponseDoctor
 )
+from tests.helpers.csv_helpers import load_fixture_csv, crear_resumen_dia_desde_csv
 
 
 # ==================== FIXTURES ====================
@@ -417,6 +421,135 @@ def test_obtener_info_doctor_no_existe(mock_connect):
     
     assert info['nombre_completo'] == 'Doctor'
     assert info['especialidad'] == 'Medicina General'
+
+
+# ==================== FIXTURES CSV ====================
+
+@pytest.fixture
+def mock_citas_doctor_1():
+    """Doctor con 8 citas (3 completadas, 5 pendientes)."""
+    return load_fixture_csv('citas_doctor_1.csv')
+
+
+@pytest.fixture
+def mock_citas_sin_citas():
+    """Doctor sin citas hoy (día libre)."""
+    return load_fixture_csv('citas_doctor_sin_citas.csv')
+
+
+@pytest.fixture
+def mock_citas_muchas():
+    """Doctor con 15 citas (caso edge)."""
+    return load_fixture_csv('citas_doctor_muchas.csv')
+
+
+# ==================== TESTS CON CSV ====================
+
+@patch('src.nodes.maya_detective_doctor_node.structured_llm_doctor')
+@patch('src.nodes.maya_detective_doctor_node.obtener_resumen_dia_doctor')
+@patch('src.nodes.maya_detective_doctor_node.obtener_info_doctor')
+def test_maya_responde_cuantas_citas_con_csv(
+    mock_info,
+    mock_resumen,
+    mock_llm,
+    estado_base_doctor,
+    mock_citas_doctor_1,
+    mock_llm_response
+):
+    """Maya responde cuántas citas tiene el doctor (usando CSV)."""
+    
+    # Setup mocks usando CSV
+    mock_info.return_value = {
+        'nombre_completo': 'Dr. Santiago',
+        'especialidad': 'Podología'
+    }
+    mock_resumen.return_value = crear_resumen_dia_desde_csv(mock_citas_doctor_1)
+    
+    mock_llm.invoke.return_value = mock_llm_response(
+        accion="responder_directo",
+        respuesta="Tienes 8 citas hoy. Has completado 3 y te quedan 5",
+        razon="Stats del día desde CSV"
+    )
+    
+    estado_base_doctor['messages'] = [HumanMessage(content="¿Cuántas citas tengo?")]
+    
+    # Ejecutar
+    resultado = nodo_maya_detective_doctor(estado_base_doctor)
+    
+    # Validar usando datos del CSV
+    total_esperado = len(mock_citas_doctor_1)
+    completadas_esperadas = len(mock_citas_doctor_1[mock_citas_doctor_1['estado'] == 'completada'])
+    
+    assert resultado.goto == "generacion_resumen"
+    assert f"{total_esperado} citas" in resultado.update['messages'][0].content
+    assert f"completado {completadas_esperadas}" in resultado.update['messages'][0].content.lower()
+
+
+@patch('src.nodes.maya_detective_doctor_node.structured_llm_doctor')
+@patch('src.nodes.maya_detective_doctor_node.obtener_resumen_dia_doctor')
+@patch('src.nodes.maya_detective_doctor_node.obtener_info_doctor')
+def test_maya_sin_citas_hoy_con_csv(
+    mock_info,
+    mock_resumen,
+    mock_llm,
+    estado_base_doctor,
+    mock_citas_sin_citas,
+    mock_llm_response
+):
+    """Maya maneja correctamente día sin citas (usando CSV vacío)."""
+    
+    mock_info.return_value = {
+        'nombre_completo': 'Dr. Santiago',
+        'especialidad': 'Podología'
+    }
+    mock_resumen.return_value = crear_resumen_dia_desde_csv(mock_citas_sin_citas)
+    
+    mock_llm.invoke.return_value = mock_llm_response(
+        accion="responder_directo",
+        respuesta="No tienes citas agendadas para hoy. Día libre! 🎉",
+        razon="Sin citas según CSV"
+    )
+    
+    estado_base_doctor['messages'] = [HumanMessage(content="¿Cuántas citas tengo?")]
+    
+    resultado = nodo_maya_detective_doctor(estado_base_doctor)
+    
+    assert "No tienes citas" in resultado.update['messages'][0].content
+    assert len(mock_citas_sin_citas) == 0  # Verificar que fixture está vacío
+
+
+@patch('src.nodes.maya_detective_doctor_node.structured_llm_doctor')
+@patch('src.nodes.maya_detective_doctor_node.obtener_resumen_dia_doctor')
+@patch('src.nodes.maya_detective_doctor_node.obtener_info_doctor')
+def test_maya_muchas_citas_con_csv(
+    mock_info,
+    mock_resumen,
+    mock_llm,
+    estado_base_doctor,
+    mock_citas_muchas,
+    mock_llm_response
+):
+    """Maya maneja correctamente día con muchas citas (usando CSV)."""
+    
+    mock_info.return_value = {
+        'nombre_completo': 'Dr. Santiago',
+        'especialidad': 'Podología'
+    }
+    mock_resumen.return_value = crear_resumen_dia_desde_csv(mock_citas_muchas)
+    
+    mock_llm.invoke.return_value = mock_llm_response(
+        accion="responder_directo",
+        respuesta="Tienes 15 citas hoy. Has completado 5 y te quedan 10",
+        razon="Muchas citas según CSV"
+    )
+    
+    estado_base_doctor['messages'] = [HumanMessage(content="¿Cuántas citas tengo?")]
+    
+    resultado = nodo_maya_detective_doctor(estado_base_doctor)
+    
+    total = len(mock_citas_muchas)
+    assert total == 15  # Verificar cantidad en fixture
+    assert f"{total} citas" in resultado.update['messages'][0].content
 
 
 if __name__ == "__main__":

@@ -1,0 +1,9 @@
+id,doctor_id,paciente_id,paciente_nombre,fecha_hora_inicio,estado,motivo_consulta
+1,1,101,Juan Pérez,2026-01-31 09:00:00,completada,Consulta general
+2,1,102,María García,2026-01-31 10:30:00,completada,Seguimiento
+3,1,103,Carlos López,2026-01-31 11:45:00,completada,Podología
+4,1,104,Ana Martínez,2026-01-31 14:30:00,agendada,Revisión
+5,1,105,Roberto Sánchez,2026-01-31 15:30:00,agendada,Tratamiento
+6,1,106,Laura Torres,2026-01-31 16:15:00,agendada,Control
+7,1,107,Pedro Ramírez,2026-01-31 17:00:00,agendada,Consulta
+8,1,108,Sofia Morales,2026-01-31 17:45:00,agendada,Seguimiento

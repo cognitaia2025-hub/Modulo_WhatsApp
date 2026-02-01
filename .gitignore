@@ -51,4 +51,5 @@ logs/*.log
 # Temporales
 nul
 tmpclaude-*
+*.tmp*.backup
 *.tmp

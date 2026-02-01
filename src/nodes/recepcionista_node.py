@@ -234,7 +234,14 @@ def formatear_slots_para_whatsapp(slots: List[Dict]) -> str:
         
         # Parsear fecha
         fecha = slot.get('fecha', '')
-        fecha_obj = datetime.strptime(fecha, "%Y-%m-%d").date() if fecha else None
+        fecha_obj = None
+        
+        if fecha:
+            try:
+                fecha_obj = datetime.strptime(fecha, "%Y-%m-%d").date()
+            except ValueError:
+                logger.warning(f"Fecha inválida en slot: {fecha}")
+                continue
         
         if fecha_obj:
             dia_nombre = DIAS_SEMANA[fecha_obj.weekday()]

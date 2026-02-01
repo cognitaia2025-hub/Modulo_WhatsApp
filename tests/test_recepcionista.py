@@ -252,7 +252,7 @@ def test_flujo_solicitando_fecha_exitoso(mock_extraer_fecha, mock_generar_slots,
     resultado = nodo_recepcionista(state_base)
     
     assert resultado.update['estado_conversacion'] == 'mostrando_slots'
-    assert len(resultado.update['datos_temporales']['slots_disponibles']) == 5
+    assert len(resultado.update['datos_temporales']['slots_disponibles']) == 3  # Mock returns 3 slots
     assert "Horarios disponibles" in resultado.update['messages'][0].content
 
 

@@ -207,6 +207,37 @@ def clear_logs():
 # Configurar logging al importar el módulo
 logger = setup_colored_logging()
 
+
+# ==================== DASHBOARD INTEGRATION ====================
+
+def setup_dashboard_integration():
+    """
+    Configura integración con dashboard si está disponible.
+    
+    Llamar desde app.py al iniciar el sistema.
+    """
+    try:
+        # Importar dinámicamente para evitar errores si el dashboard no está instalado
+        import sys
+        import os
+        
+        # Agregar el directorio dashboard al path
+        dashboard_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'dashboard', 'backend')
+        if dashboard_path not in sys.path:
+            sys.path.insert(0, dashboard_path)
+        
+        from logger_interceptor import setup_dashboard_logging
+        from main import emit_log
+        
+        setup_dashboard_logging(emit_log)
+        logger.info("✅ Dashboard integration activada")
+        
+    except ImportError as e:
+        logger.debug(f"Dashboard no disponible (normal en producción): {e}")
+    except Exception as e:
+        logger.warning(f"Error al configurar dashboard integration: {e}")
+
+
 # Exportar funciones principales
 __all__ = [
     'LogColors',
@@ -216,5 +247,6 @@ __all__ = [
     'log_user_message',
     'log_llm_interaction',
     'setup_colored_logging',
-    'clear_logs'
+    'clear_logs',
+    'setup_dashboard_integration'
 ]

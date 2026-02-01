@@ -8,15 +8,30 @@ Tests para Nodo N8: Sincronizador Híbrido
 
 import pytest
 import sys
+import os
 from pathlib import Path
 from unittest.mock import patch, Mock, MagicMock
 from langgraph.types import Command
+
+# Set dummy env vars to avoid configuration errors during import
+os.environ.setdefault('OPENAI_API_KEY', 'sk-dummy_key_for_tests')
+os.environ.setdefault('DEEPSEEK_API_KEY', 'sk-dummy_key_for_tests')
+os.environ.setdefault('ANTHROPIC_API_KEY', 'sk-dummy_key_for_tests')
+os.environ.setdefault('DATABASE_URL', 'postgresql://test:test@localhost/test')
+os.environ.setdefault('POSTGRES_HOST', 'localhost')
+os.environ.setdefault('POSTGRES_PORT', '5432')
+os.environ.setdefault('POSTGRES_DB', 'test_db')
+os.environ.setdefault('POSTGRES_USER', 'test_user')
+os.environ.setdefault('POSTGRES_PASSWORD', 'test_password')
+os.environ.setdefault('GOOGLE_SERVICE_ACCOUNT_FILE', 'dummy_file.json')
+os.environ.setdefault('GOOGLE_CALENDAR_ID', 'dummy_calendar_id')
+os.environ.setdefault('DEFAULT_TIMEZONE', 'America/Tijuana')
 
 # Import directly from module file to avoid __init__.py circular imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
-@patch('src.nodes.sincronizador_hibrido_node.list_events_tool')
+@patch('src.tool.list_events_tool')
 @patch('src.nodes.sincronizador_hibrido_node.psycopg.connect')
 def test_retorna_command(mock_conn, mock_calendar):
     """Nodo retorna Command."""
@@ -107,7 +122,7 @@ def test_detectar_cambios_encuentra_eliminadas():
     assert cambios['eliminadas'][0] == 1
 
 
-@patch('src.nodes.sincronizador_hibrido_node.list_events_tool')
+@patch('src.tool.list_events_tool')
 @patch('src.nodes.sincronizador_hibrido_node.psycopg.connect')
 def test_maneja_errores_con_command(mock_conn, mock_calendar):
     """Maneja errores y retorna Command con error."""

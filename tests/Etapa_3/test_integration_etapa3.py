@@ -15,7 +15,7 @@ def test_flujo_completo_doctor(estado_con_doctor, mock_llm_clasificacion, mock_d
     # 1. Filtrado inteligente
     estado = estado_con_doctor.copy()
     resultado1 = nodo_filtrado_inteligente(estado)
-    estado.update(resultado1)
+    estado.update(resultado1.update)  # Command returns updates in .update attribute
     
     assert "clasificacion_mensaje" in estado
     
@@ -25,7 +25,7 @@ def test_flujo_completo_doctor(estado_con_doctor, mock_llm_clasificacion, mock_d
     mock_cursor.fetchone.return_value = ({"doctor_id": 1, "citas_hoy": 0, "citas_semana": 0, "pacientes_totales": 0},)
     
     resultado2 = nodo_recuperacion_medica(estado)
-    estado.update(resultado2)
+    estado.update(resultado2.update)  # Command returns updates in .update attribute
     
     assert "contexto_medico" in estado
     
@@ -58,7 +58,7 @@ def test_flujo_completo_paciente(estado_con_paciente, mock_llm_clasificacion, mo
     
     # 2. Recuperación (debe saltar)
     resultado2 = nodo_recuperacion_medica(estado)
-    assert resultado2["contexto_medico"] is None
+    assert resultado2.update["contexto_medico"] is None
     
     # 3. Selección
     mock_llm_sel = mocker.patch('src.nodes.seleccion_herramientas_node.llm_selector')
@@ -145,7 +145,7 @@ def test_contexto_medico_solo_para_doctores(estado_con_paciente, estado_con_doct
     """Test 5.8: Contexto médico solo se genera para doctores"""
     # Paciente
     resultado_paciente = nodo_recuperacion_medica(estado_con_paciente)
-    assert resultado_paciente["contexto_medico"] is None
+    assert resultado_paciente.update["contexto_medico"] is None
     
     # Doctor
     mock_cursor = mock_db_connection.cursor.return_value.__enter__.return_value
@@ -153,7 +153,7 @@ def test_contexto_medico_solo_para_doctores(estado_con_paciente, estado_con_doct
     mock_cursor.fetchone.return_value = ({"doctor_id": 1, "citas_hoy": 0, "citas_semana": 0, "pacientes_totales": 0},)
     
     resultado_doctor = nodo_recuperacion_medica(estado_con_doctor)
-    assert resultado_doctor["contexto_medico"] is not None
+    assert resultado_doctor.update["contexto_medico"] is not None
 
 
 def test_flujo_chat_sin_herramientas(estado_con_mensaje_chat, mock_llm_clasificacion, mock_registrar_clasificacion):
@@ -185,7 +185,7 @@ def test_performance_flujo_completo(estado_con_doctor, mock_llm_clasificacion, m
     
     # 1. Filtrado
     resultado1 = nodo_filtrado_inteligente(estado)
-    estado.update(resultado1)
+    estado.update(resultado1.update)  # Command returns updates in .update attribute
     
     # 2. Recuperación
     mock_cursor = mock_db_connection.cursor.return_value.__enter__.return_value
@@ -193,7 +193,7 @@ def test_performance_flujo_completo(estado_con_doctor, mock_llm_clasificacion, m
     mock_cursor.fetchone.return_value = ({"doctor_id": 1, "citas_hoy": 0, "citas_semana": 0, "pacientes_totales": 0},)
     
     resultado2 = nodo_recuperacion_medica(estado)
-    estado.update(resultado2)
+    estado.update(resultado2.update)  # Command returns updates in .update attribute
     
     # 3. Selección
     mock_llm_sel = mocker.patch('src.nodes.seleccion_herramientas_node.llm_selector')

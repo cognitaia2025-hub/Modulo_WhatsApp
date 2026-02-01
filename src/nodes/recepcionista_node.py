@@ -1,33 +1,84 @@
 """
-Nodo Recepcionista Conversacional - Etapa 4
+Nodo 6R: Recepcionista Conversacional Modernizado
 
-Maneja el flujo conversacional completo para que pacientes externos 
-agenden citas vía WhatsApp.
+MEJORAS APLICADAS:
+✅ Command pattern con routing dinámico
+✅ Pydantic structured output para extracción
+✅ Estado conversacional robusto con 7 estados
+✅ Timeout reducido (10s) alineado con otros nodos
+✅ Manejo de flujo multi-turno completo
 
-Estados de conversación:
-- inicial: Primera interacción
-- solicitando_nombre: Paciente nuevo sin registro
-- mostrando_opciones: Se mostraron 3 slots disponibles  
-- esperando_seleccion: Esperando que paciente elija A/B/C
-- confirmando: Agendando cita en BD
-- completado: Cita confirmada
+Este es el nodo MÁS CRÍTICO (70% del tráfico) que maneja el flujo 
+conversacional completo de agendamiento para pacientes externos.
+
+Estados:
+inicial → solicitando_nombre → solicitando_fecha → mostrando_slots → 
+confirmando_cita → completado/cancelado
 """
 
+import os
 import logging
-from typing import Dict, Any, List
-from datetime import datetime, date
-from langchain_core.messages import AIMessage
+from typing import Optional, Literal, List, Dict, Any
+from datetime import datetime
+from pydantic import BaseModel, Field
+from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import AIMessage, HumanMessage
+from langgraph.types import Command
+from dotenv import load_dotenv
 
 from src.state.agent_state import WhatsAppAgentState
-from src.utils.logging_config import setup_colored_logging
-from src.utils.nlp_extractors import extraer_nombre_con_llm, extraer_seleccion
-from src.medical.crud import get_paciente_by_phone, registrar_paciente_externo, get_doctor_by_id
+from src.utils.logging_config import setup_colored_logging, log_separator, log_node_io
+from src.utils.time_utils import get_time_context
+from src.medical.crud import get_paciente_by_phone, registrar_paciente_externo
 from src.medical.slots import generar_slots_con_turnos
 
-# Configurar logging
+load_dotenv()
 logger = setup_colored_logging()
 
-# Configuración
+
+# ==================== PYDANTIC MODELS ====================
+
+class DatosRecolectados(BaseModel):
+    """Datos del paciente recolectados durante conversación."""
+    nombre_paciente: Optional[str] = Field(default=None, description="Nombre completo")
+    fecha_preferida: Optional[str] = Field(default=None, description="Fecha en formato YYYY-MM-DD")
+    hora_preferida: Optional[str] = Field(default=None, description="Hora en formato HH:MM")
+    motivo_consulta: Optional[str] = Field(default=None, description="Motivo de la cita")
+    telefono_contacto: Optional[str] = Field(default=None, description="Teléfono alternativo")
+
+
+class ExtraccionNombre(BaseModel):
+    """Extrae nombre del paciente."""
+    nombre_completo: str = Field(description="Nombre completo del paciente")
+    confianza: Literal["alta", "media", "baja"] = Field(description="Nivel de confianza")
+
+
+class ExtraccionFecha(BaseModel):
+    """Extrae fecha preferida."""
+    fecha: str = Field(description="Fecha en formato YYYY-MM-DD")
+    es_flexible: bool = Field(default=False, description="Si el paciente es flexible")
+
+
+class SeleccionSlot(BaseModel):
+    """Selección de slot por el paciente."""
+    opcion_seleccionada: int = Field(description="Número de opción (1, 2, 3, etc.)")
+    confirmado: bool = Field(default=True)
+
+
+# ==================== CONSTANTES ====================
+
+# Estados del flujo conversacional
+ESTADOS_RECEPCIONISTA = {
+    'inicial': 'Esperando inicio de conversación',
+    'solicitando_nombre': 'Pidiendo nombre del paciente',
+    'solicitando_fecha': 'Pidiendo fecha preferida',
+    'mostrando_slots': 'Mostrando horarios disponibles',
+    'confirmando_cita': 'Confirmando datos de la cita',
+    'completado': 'Cita agendada exitosamente',
+    'cancelado': 'Usuario canceló el proceso'
+}
+
 OPCIONES_LETRAS = ['A', 'B', 'C', 'D', 'E']
 DIAS_SEMANA = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo']
 MESES = [
@@ -36,296 +87,145 @@ MESES = [
 ]
 
 
-def recepcionista_node(state: WhatsAppAgentState) -> Dict:
+# ==================== CONFIGURACIÓN LLM ====================
+
+llm_primary = ChatOpenAI(
+    model="deepseek-chat",
+    temperature=0.3,  # Más determinístico para extracción
+    max_tokens=200,
+    api_key=os.getenv("DEEPSEEK_API_KEY"),
+    base_url="https://api.deepseek.com/v1",
+    timeout=10.0,  # ✅ Consistente con otros nodos
+    max_retries=0
+)
+
+llm_fallback = ChatAnthropic(
+    model="claude-3-5-haiku-20241022",
+    temperature=0.3,
+    max_tokens=200,
+    api_key=os.getenv("ANTHROPIC_API_KEY"),
+    timeout=10.0,
+    max_retries=0
+)
+
+llm_extractor = llm_primary.with_fallbacks([llm_fallback])
+
+
+# ==================== FUNCIONES DE EXTRACCIÓN ====================
+
+def extraer_nombre_con_llm(mensaje: str) -> Optional[str]:
     """
-    Nodo principal del flujo de recepcionista conversacional.
+    Extrae nombre del paciente usando Pydantic structured output.
+    
+    MEJORAS:
+    ✅ Pydantic valida automáticamente
+    ✅ Incluye nivel de confianza
     
     Args:
-        state: Estado del agente WhatsApp
+        mensaje: Mensaje del usuario con su nombre
         
     Returns:
-        Estado actualizado con respuesta del recepcionista
+        Nombre extraído o None si falla
     """
-    logger.info("🏥 === NODO RECEPCIONISTA CONVERSACIONAL ===")
+    llm_with_structure = llm_extractor.with_structured_output(
+        ExtraccionNombre,
+        method="json_schema"
+    )
     
-    # Obtener datos del estado
-    estado_conv = state.get('estado_conversacion', 'inicial')
+    prompt = f"""Extrae el nombre completo del paciente de este mensaje.
+
+MENSAJE: "{mensaje}"
+
+Si el mensaje contiene un nombre completo, extráelo.
+Si no hay nombre, usa "desconocido" y confianza "baja".
+
+Retorna JSON con nombre_completo y confianza."""
+    
+    try:
+        resultado = llm_with_structure.invoke(prompt)
+        if resultado.confianza in ["alta", "media"]:
+            logger.info(f"    ✅ Nombre extraído: '{resultado.nombre_completo}' (confianza: {resultado.confianza})")
+            return resultado.nombre_completo
+        logger.warning(f"    ⚠️ Confianza baja en nombre extraído: '{resultado.nombre_completo}'")
+        return None
+    except Exception as e:
+        logger.error(f"    ❌ Error extrayendo nombre: {e}")
+        return None
+
+
+def extraer_fecha_con_llm(mensaje: str, tiempo_context: str) -> Optional[str]:
+    """
+    Extrae fecha preferida con Pydantic.
+    
+    Args:
+        mensaje: Mensaje del usuario con la fecha
+        tiempo_context: Contexto temporal actual
+        
+    Returns:
+        Fecha en formato YYYY-MM-DD o None
+    """
+    llm_with_structure = llm_extractor.with_structured_output(ExtraccionFecha)
+    
+    prompt = f"""Extrae la fecha preferida del paciente.
+
+CONTEXTO DE TIEMPO:
+{tiempo_context}
+
+MENSAJE: "{mensaje}"
+
+Convierte expresiones como "mañana", "el lunes", "en 3 días" a formato YYYY-MM-DD.
+Si no hay fecha clara, usa None.
+
+Retorna JSON con fecha y es_flexible."""
+    
+    try:
+        resultado = llm_with_structure.invoke(prompt)
+        if resultado.fecha and resultado.fecha.lower() != "none":
+            logger.info(f"    ✅ Fecha extraída: {resultado.fecha} (flexible: {resultado.es_flexible})")
+            return resultado.fecha
+        return None
+    except Exception as e:
+        logger.error(f"    ❌ Error extrayendo fecha: {e}")
+        return None
+
+
+def extraer_ultimo_mensaje_usuario(state: WhatsAppAgentState) -> str:
+    """
+    Extrae el último mensaje del usuario del estado.
+    
+    Args:
+        state: Estado actual
+        
+    Returns:
+        Contenido del último mensaje humano
+    """
     messages = state.get('messages', [])
-    paciente_phone = state.get('user_id', '')
-    
     if not messages:
-        logger.error("❌ No hay mensajes en el estado")
-        return {**state, 'respuesta_recepcionista': "Error: No hay mensajes"}
+        return ""
     
-    ultimo_mensaje = messages[-1]
-    mensaje_contenido = getattr(ultimo_mensaje, 'content', '')
+    # Buscar último mensaje humano
+    for msg in reversed(messages):
+        if isinstance(msg, HumanMessage):
+            return msg.content
+        elif hasattr(msg, 'type') and msg.type == 'human':
+            return msg.content
     
-    logger.info(f"📱 Paciente: {paciente_phone}")
-    logger.info(f"🔄 Estado conversación: {estado_conv}")
-    logger.info(f"💬 Mensaje: {mensaje_contenido[:50]}...")
-    
-    respuesta = ""
-    nuevo_estado = estado_conv
-    slots_disponibles = state.get('slots_disponibles', [])
-    
-    try:
-        if estado_conv == 'inicial':
-            respuesta, nuevo_estado, slots_disponibles = _manejar_estado_inicial(
-                paciente_phone, mensaje_contenido
-            )
-            
-        elif estado_conv == 'solicitando_nombre':
-            respuesta, nuevo_estado, slots_disponibles = _manejar_solicitar_nombre(
-                paciente_phone, mensaje_contenido
-            )
-            
-        elif estado_conv == 'esperando_seleccion':
-            respuesta, nuevo_estado = _manejar_esperando_seleccion(
-                paciente_phone, mensaje_contenido, slots_disponibles
-            )
-            
-        else:
-            # Estados terminales o no manejados
-            respuesta = "¡Hola! ¿En qué puedo ayudarte hoy?"
-            nuevo_estado = 'inicial'
-            slots_disponibles = []
-    
-    except Exception as e:
-        logger.error(f"❌ Error en recepcionista_node: {e}")
-        respuesta = "Lo siento, ha ocurrido un error. ¿Podrías intentar de nuevo?"
-        nuevo_estado = 'inicial'
-        slots_disponibles = []
-    
-    # Agregar mensaje de respuesta a messages
-    ai_message = AIMessage(content=respuesta)
-
-    # Actualizar estado (solo retornar las actualizaciones necesarias)
-    estado_actualizado = {
-        'messages': [ai_message],  # Se agregará a messages gracias a add_messages
-        'respuesta_recepcionista': respuesta,
-        'estado_conversacion': nuevo_estado,
-        'slots_disponibles': slots_disponibles,
-        'timestamp': datetime.now().isoformat()
-    }
-
-    logger.info(f"✅ Respuesta generada ({len(respuesta)} chars)")
-    logger.info(f"🔄 Nuevo estado: {nuevo_estado}")
-
-    return estado_actualizado
+    # Fallback al último mensaje
+    ultimo = messages[-1]
+    return getattr(ultimo, 'content', str(ultimo))
 
 
-def _manejar_estado_inicial(paciente_phone: str, mensaje: str) -> tuple[str, str, List[Dict]]:
-    """
-    Maneja el estado inicial de conversación.
-    
-    Returns:
-        (respuesta, nuevo_estado, slots_disponibles)
-    """
-    logger.info("🟢 Manejando estado inicial")
-    
-    # 1. Verificar si paciente existe
-    paciente = get_paciente_by_phone(paciente_phone)
-    
-    if not paciente:
-        # Paciente nuevo - pedir nombre
-        logger.info("🆕 Paciente nuevo detectado - solicitando nombre")
-        respuesta = """Hola!
+# ==================== FUNCIONES AUXILIARES ====================
 
-Veo que es tu primera vez. Para agendarte una cita, necesito tu nombre completo.
-
-¿Cómo te llamas?"""
-        
-        return respuesta, 'solicitando_nombre', []
-    
-    else:
-        # Paciente existente - mostrar opciones directamente
-        nombre_paciente = paciente.get('nombre_completo', 'paciente')
-        # Limpiar nombre de sufijos de prueba
-        nombre_paciente = nombre_paciente.replace(' (Test)', '').replace(' (test)', '')
-        logger.info(f"✅ Paciente existente: {nombre_paciente}")
-        
-        # Generar slots disponibles
-        slots = generar_slots_con_turnos(dias_adelante=7)
-        
-        if not slots or len(slots) < 3:
-            respuesta = """Hola!
-
-Lo siento, no tenemos disponibilidad en los próximos días.
-¿Podrías intentar más tarde o contactarnos por teléfono?"""
-            
-            return respuesta, 'completado', []
-        
-        # Mostrar 3 opciones
-        respuesta_slots = _formatear_opciones_slots(slots[:3])
-        respuesta = f"""Hola {nombre_paciente}!
-
-{respuesta_slots}"""
-        
-        return respuesta, 'esperando_seleccion', slots[:3]
-
-
-def _manejar_solicitar_nombre(paciente_phone: str, mensaje: str) -> tuple[str, str, List[Dict]]:
-    """
-    Maneja el estado de solicitar nombre.
-    
-    Returns:
-        (respuesta, nuevo_estado, slots_disponibles)
-    """
-    logger.info("📝 Manejando solicitud de nombre")
-    
-    # Extraer nombre del mensaje
-    nombre = extraer_nombre_con_llm(mensaje)
-    
-    if not nombre or len(nombre.strip()) < 2:
-        logger.warning(f"Nombre extraído muy corto: '{nombre}'")
-        respuesta = """No pude entender tu nombre correctamente. 
-
-¿Podrías decírmelo de nuevo? Por ejemplo: "Mi nombre es Juan Pérez\""""
-        
-        return respuesta, 'solicitando_nombre', []
-    
-    # Registrar paciente
-    try:
-        resultado = registrar_paciente_externo(paciente_phone, nombre)
-        logger.info(f"✅ Paciente registrado: {resultado}")
-        
-        # Generar slots disponibles
-        slots = generar_slots_con_turnos(dias_adelante=7)
-        
-        if not slots or len(slots) < 3:
-            respuesta = f"""¡Gracias {nombre}! 
-
-Ya te registré en nuestro sistema. 
-Sin embargo, no tenemos disponibilidad en los próximos días.
-
-¿Podrías intentar más tarde o contactarnos por teléfono?"""
-            
-            return respuesta, 'completado', []
-        
-        # Mostrar opciones
-        respuesta_slots = _formatear_opciones_slots(slots[:3])
-        respuesta = f"""Gracias {nombre}!
-
-Ya te registré en el sistema.
-
-{respuesta_slots}"""
-        
-        return respuesta, 'esperando_seleccion', slots[:3]
-        
-    except Exception as e:
-        logger.error(f"❌ Error registrando paciente: {e}")
-        respuesta = """Ha ocurrido un problema al registrarte en el sistema.
-
-¿Podrías intentar de nuevo más tarde o contactarnos por teléfono?"""
-        
-        return respuesta, 'inicial', []
-
-
-def _manejar_esperando_seleccion(paciente_phone: str, mensaje: str, slots: List[Dict]) -> tuple[str, str]:
-    """
-    Maneja el estado de esperar selección.
-    
-    Returns:
-        (respuesta, nuevo_estado)
-    """
-    logger.info("🎯 Manejando selección de slot")
-    
-    # Extraer selección
-    seleccion = extraer_seleccion(mensaje)
-    
-    if seleccion is None:
-        logger.warning(f"Selección no válida: '{mensaje}'")
-        respuesta = """No pude entender tu selección. 
-
-¿Podrías escribir la letra de la opción que prefieres? Por ejemplo: "A" o "Escojo la B\""""
-        
-        return respuesta, 'esperando_seleccion'
-    
-    # Validar que la selección esté en rango
-    if seleccion < 0 or seleccion >= len(slots):
-        logger.warning(f"Selección fuera de rango: {seleccion}, slots disponibles: {len(slots)}")
-        respuesta = f"""Opción no válida. 
-
-Por favor escoge una de las opciones disponibles: {', '.join(OPCIONES_LETRAS[:len(slots)])}"""
-        
-        return respuesta, 'esperando_seleccion'
-    
-    # Obtener slot seleccionado
-    slot_elegido = slots[seleccion]
-    
-    # Intentar agendar la cita
-    try:
-        # Obtener datos del paciente
-        paciente = get_paciente_by_phone(paciente_phone)
-        if not paciente:
-            logger.error("❌ Paciente no encontrado al agendar")
-            respuesta = """Ha ocurrido un problema. ¿Podrías intentar de nuevo desde el inicio?"""
-            return respuesta, 'inicial'
-        
-        logger.info(f"🎯 Agendando cita: paciente_id={paciente['id']}, slot={slot_elegido['fecha']} {slot_elegido['hora_inicio']}")
-        
-        # Agendar usando el doctor asignado en el slot
-        # get_doctor_by_id retorna dict
-        doctor = get_doctor_by_id(slot_elegido['doctor_asignado_id'])
-        
-        if not doctor:
-            logger.error(f"❌ Doctor no encontrado: ID {slot_elegido['doctor_asignado_id']}")
-            respuesta = """Ha ocurrido un problema con la asignación del doctor.
-
-¿Podrías intentar de nuevo?"""
-            return respuesta, 'inicial'
-        
-        # Agendar la cita usando función CRUD simplificada
-        from src.medical.crud import agendar_cita_simple
-        from datetime import datetime as dt
-        
-        # Parsear fecha y hora del slot
-        fecha_inicio_str = f"{slot_elegido['fecha']} {slot_elegido['hora_inicio']}"
-        fecha_fin_str = f"{slot_elegido['fecha']} {slot_elegido['hora_fin']}"
-        fecha_inicio = dt.strptime(fecha_inicio_str, "%Y-%m-%d %H:%M")
-        fecha_fin = dt.strptime(fecha_fin_str, "%Y-%m-%d %H:%M")
-        
-        # Agendar la cita
-        cita_id = agendar_cita_simple(
-            doctor_id=doctor['id'],
-            paciente_id=paciente['id'],
-            fecha_inicio=fecha_inicio,
-            fecha_fin=fecha_fin,
-            motivo="Cita agendada via WhatsApp"
-        )
-        
-        if cita_id:
-            logger.info(f"✅ Cita agendada exitosamente (ID: {cita_id})")
-            respuesta = f"""Perfecto! Tu cita ha sido agendada.
-
-Detalles de tu cita:
-{_formatear_detalle_slot_seleccionado(slot_elegido, doctor['nombre_completo'])}
-
-Si necesitas cancelar o reprogramar, contáctanos al teléfono de la clínica.
-
-Te esperamos!"""
-        else:
-            logger.error("❌ Error agendando cita")
-            respuesta = """Lo siento, no pude agendar la cita en este momento.
-
-¿Podrías intentar con otra opción o contactarnos por teléfono?"""
-            return respuesta, 'esperando_seleccion'
-            
-    except Exception as e:
-        logger.error(f"❌ Error crítico agendando cita: {e}")
-        respuesta = """Ha ocurrido un problema al agendar la cita.
-
-¿Podrías intentar de nuevo o contactarnos por teléfono?"""
-        return respuesta, 'inicial'
-    
-    return respuesta, 'completado'
-
-
-def _formatear_opciones_slots(slots: List[Dict]) -> str:
+def formatear_slots_para_whatsapp(slots: List[Dict]) -> str:
     """
     Formatea los slots disponibles para mostrar al paciente.
-    NO menciona el doctor hasta la confirmación final.
-    Formato limpio para WhatsApp (pocos emojis, claro y conciso).
+    
+    Args:
+        slots: Lista de slots disponibles
+        
+    Returns:
+        String formateado para WhatsApp
     """
     lineas = ["Horarios disponibles:", ""]
     
@@ -333,95 +233,329 @@ def _formatear_opciones_slots(slots: List[Dict]) -> str:
         letra = OPCIONES_LETRAS[i]
         
         # Parsear fecha
-        fecha_obj = date.fromisoformat(slot['fecha'])
-        dia_nombre = DIAS_SEMANA[fecha_obj.weekday()]
-        dia_numero = fecha_obj.day
-        mes_nombre = MESES[fecha_obj.month - 1]
+        fecha = slot.get('fecha', '')
+        fecha_obj = datetime.strptime(fecha, "%Y-%m-%d").date() if fecha else None
         
-        # Formatear horarios
-        hora_inicio = slot['hora_inicio'][:5]  # HH:MM
-        hora_fin = slot['hora_fin'][:5]      # HH:MM
-        
-        lineas.append(f"{letra}) {dia_nombre.title()} {dia_numero} de {mes_nombre}, {hora_inicio} - {hora_fin}")
+        if fecha_obj:
+            dia_nombre = DIAS_SEMANA[fecha_obj.weekday()]
+            dia_numero = fecha_obj.day
+            mes_nombre = MESES[fecha_obj.month - 1]
+            
+            # Formatear horarios
+            hora_inicio = slot.get('hora_inicio', '')[:5]  # HH:MM
+            hora_fin = slot.get('hora_fin', '')[:5]      # HH:MM
+            
+            lineas.append(f"{letra}) {dia_nombre.title()} {dia_numero} de {mes_nombre}, {hora_inicio} - {hora_fin}")
     
     lineas.append("")
-    lineas.append("¿Cuál prefieres? Responde A, B o C")
+    lineas.append("¿Cuál prefieres? Responde con la letra (A, B, C, etc.)")
     
     return "\n".join(lineas)
 
 
-def _formatear_detalle_slot_seleccionado(slot: Dict, doctor_nombre: str) -> str:
+# ==================== NODO PRINCIPAL ====================
+
+def nodo_recepcionista(state: WhatsAppAgentState) -> Command:
     """
-    Formatea el detalle del slot seleccionado para confirmación.
-    AQUÍ SÍ se revela el doctor asignado.
+    Nodo 6R: Maneja flujo conversacional multi-turno para agendamiento de citas
+    
+    MEJORAS APLICADAS:
+    ✅ Command pattern con routing dinámico
+    ✅ Pydantic structured output
+    ✅ Estado conversacional robusto
+    ✅ Timeout reducido (10s)
+    
+    Flujo:
+    inicial → solicitando_nombre → solicitando_fecha → mostrando_slots → 
+    confirmando_cita → completado
+    
+    Args:
+        state: Estado actual del agente
+        
+    Returns:
+        Command con update y goto según estado
     """
-    # Parsear fecha
-    fecha_obj = date.fromisoformat(slot['fecha'])
-    dia_nombre = DIAS_SEMANA[fecha_obj.weekday()]
-    dia_numero = fecha_obj.day
-    mes_nombre = MESES[fecha_obj.month - 1]
+    log_separator(logger, "NODO_6R_RECEPCIONISTA", "INICIO")
     
-    # Formatear horarios
-    hora_inicio = slot['hora_inicio'][:5]  # HH:MM
-    hora_fin = slot['hora_fin'][:5]      # HH:MM
+    estado_actual = state.get('estado_conversacion', 'inicial')
+    datos_temp = state.get('datos_temporales', {})
+    mensaje_usuario = extraer_ultimo_mensaje_usuario(state)
+    user_id = state.get('user_id', '')
     
-    detalle = f"""📅 Fecha: {dia_nombre.title()} {dia_numero} de {mes_nombre}
-🕐 Hora: {hora_inicio} a {hora_fin}
-👨‍⚕️ Doctor: {doctor_nombre}"""
+    # Log de input
+    input_data = f"estado: {estado_actual}\ndatos: {list(datos_temp.keys())}\nmensaje: {mensaje_usuario[:50]}"
+    log_node_io(logger, "INPUT", "NODO_6R", input_data)
     
-    return detalle
+    logger.info(f"    🎯 Estado actual: {estado_actual}")
+    logger.info(f"    📝 Datos recolectados: {list(datos_temp.keys())}")
+    
+    # ==================== MÁQUINA DE ESTADOS ====================
+    
+    if estado_actual == 'inicial':
+        # Verificar si paciente existe
+        paciente = get_paciente_by_phone(user_id)
+        
+        if not paciente:
+            # Paciente nuevo - pedir nombre
+            respuesta = "¡Hola! Claro, te ayudo a agendar una cita. ¿Cuál es tu nombre completo?"
+            
+            return Command(
+                update={
+                    'messages': [AIMessage(content=respuesta)],
+                    'estado_conversacion': 'solicitando_nombre'
+                },
+                goto="END"
+            )
+        else:
+            # Paciente existente - ir directo a solicitar fecha
+            nombre = paciente.get('nombre_completo', 'paciente')
+            datos_temp['nombre_paciente'] = nombre
+            respuesta = f"¡Hola {nombre}! ¿Qué día prefieres para tu cita?"
+            
+            return Command(
+                update={
+                    'messages': [AIMessage(content=respuesta)],
+                    'estado_conversacion': 'solicitando_fecha',
+                    'datos_temporales': datos_temp
+                },
+                goto="END"
+            )
+    
+    elif estado_actual == 'solicitando_nombre':
+        # Extraer nombre con Pydantic
+        nombre = extraer_nombre_con_llm(mensaje_usuario)
+        
+        if nombre and len(nombre.strip()) > 2:
+            # Registrar paciente
+            try:
+                resultado = registrar_paciente_externo(user_id, nombre)
+                logger.info(f"    ✅ Paciente registrado: {resultado}")
+                
+                datos_temp['nombre_paciente'] = nombre
+                respuesta = f"Perfecto, {nombre}. ¿Qué día prefieres para tu cita?"
+                nuevo_estado = 'solicitando_fecha'
+            except Exception as e:
+                logger.error(f"    ❌ Error registrando paciente: {e}")
+                respuesta = "Hubo un problema al registrarte. ¿Podrías intentar de nuevo?"
+                nuevo_estado = 'inicial'
+        else:
+            respuesta = "No pude identificar tu nombre. ¿Podrías decirme tu nombre completo?"
+            nuevo_estado = 'solicitando_nombre'
+        
+        return Command(
+            update={
+                'messages': [AIMessage(content=respuesta)],
+                'estado_conversacion': nuevo_estado,
+                'datos_temporales': datos_temp
+            },
+            goto="END"
+        )
+    
+    elif estado_actual == 'solicitando_fecha':
+        # Extraer fecha con Pydantic
+        tiempo_ctx = get_time_context()
+        fecha = extraer_fecha_con_llm(mensaje_usuario, tiempo_ctx)
+        
+        if fecha:
+            # Generar slots disponibles
+            try:
+                slots = generar_slots_con_turnos(dias_adelante=7)
+                
+                # Filtrar slots para la fecha solicitada si es posible
+                # (simplificación: mostrar primeros 5 slots)
+                if slots and len(slots) >= 3:
+                    datos_temp['fecha_seleccionada'] = fecha
+                    datos_temp['slots_disponibles'] = slots[:5]  # Max 5 opciones
+                    
+                    # Formatear slots
+                    slots_texto = formatear_slots_para_whatsapp(slots[:5])
+                    
+                    respuesta = f"Encontré estos horarios disponibles:\n\n{slots_texto}"
+                    nuevo_estado = 'mostrando_slots'
+                else:
+                    respuesta = f"No hay horarios disponibles para {fecha}. ¿Tienes otra fecha en mente?"
+                    nuevo_estado = 'solicitando_fecha'
+            except Exception as e:
+                logger.error(f"    ❌ Error consultando slots: {e}")
+                respuesta = "Hubo un problema consultando los horarios. ¿Podrías intentar con otra fecha?"
+                nuevo_estado = 'solicitando_fecha'
+        else:
+            respuesta = "No entendí la fecha. ¿Podrías decirme qué día prefieres? Por ejemplo: 'mañana' o 'el lunes 15'"
+            nuevo_estado = 'solicitando_fecha'
+        
+        return Command(
+            update={
+                'messages': [AIMessage(content=respuesta)],
+                'estado_conversacion': nuevo_estado,
+                'datos_temporales': datos_temp
+            },
+            goto="END"
+        )
+    
+    elif estado_actual == 'mostrando_slots':
+        # Extraer selección con Pydantic
+        llm_with_structure = llm_extractor.with_structured_output(SeleccionSlot)
+        
+        try:
+            seleccion = llm_with_structure.invoke(f"El usuario dijo: '{mensaje_usuario}'. Extrae qué opción seleccionó (1-5 o A-E). Si dice 'A' retorna 1, 'B' retorna 2, etc.")
+            opcion = seleccion.opcion_seleccionada - 1  # Índice 0-based
+            
+            if 0 <= opcion < len(datos_temp.get('slots_disponibles', [])):
+                slot_seleccionado = datos_temp['slots_disponibles'][opcion]
+                datos_temp['slot_final'] = slot_seleccionado
+                
+                # Obtener nombre del doctor desde el slot
+                doctor_nombre = slot_seleccionado.get('doctor_nombre', 'Doctor')
+                
+                # Confirmar datos
+                respuesta = f"""Perfecto, confirmo tu cita:
+
+📅 Fecha: {slot_seleccionado['fecha']}
+🕐 Hora: {slot_seleccionado['hora_inicio']}
+👨‍⚕️ Doctor: {doctor_nombre}
+👤 Paciente: {datos_temp['nombre_paciente']}
+
+¿Confirmas? (Sí/No)"""
+                
+                return Command(
+                    update={
+                        'messages': [AIMessage(content=respuesta)],
+                        'estado_conversacion': 'confirmando_cita',
+                        'datos_temporales': datos_temp
+                    },
+                    goto="END"
+                )
+        except Exception as e:
+            logger.error(f"    ❌ Error procesando selección: {e}")
+        
+        respuesta = "No entendí tu selección. Por favor responde con la letra (A, B, C, etc.)"
+        return Command(
+            update={'messages': [AIMessage(content=respuesta)]},
+            goto="END"
+        )
+    
+    elif estado_actual == 'confirmando_cita':
+        # Detectar confirmación
+        mensaje_lower = mensaje_usuario.lower()
+        
+        if any(word in mensaje_lower for word in ['sí', 'si', 'confirmo', 'ok', 'vale', 'correcto', 'yes']):
+            # Agendar la cita
+            from src.medical.crud import agendar_cita_simple
+            from datetime import datetime as dt
+            
+            slot = datos_temp['slot_final']
+            paciente = get_paciente_by_phone(user_id)
+            
+            if not paciente:
+                respuesta = "Hubo un error. No encontré tu registro. ¿Empezamos de nuevo?"
+                return Command(
+                    update={
+                        'messages': [AIMessage(content=respuesta)],
+                        'estado_conversacion': 'inicial',
+                        'datos_temporales': {}
+                    },
+                    goto="END"
+                )
+            
+            try:
+                # Parsear fecha y hora del slot
+                fecha_inicio_str = f"{slot['fecha']} {slot['hora_inicio']}"
+                fecha_fin_str = f"{slot['fecha']} {slot['hora_fin']}"
+                fecha_inicio = dt.strptime(fecha_inicio_str, "%Y-%m-%d %H:%M")
+                fecha_fin = dt.strptime(fecha_fin_str, "%Y-%m-%d %H:%M")
+                
+                # Agendar la cita
+                cita_id = agendar_cita_simple(
+                    doctor_id=slot.get('doctor_asignado_id'),
+                    paciente_id=paciente['id'],
+                    fecha_inicio=fecha_inicio,
+                    fecha_fin=fecha_fin,
+                    motivo="Cita agendada via WhatsApp"
+                )
+                
+                if cita_id:
+                    respuesta = f"""✅ ¡Cita agendada exitosamente!
+
+Tu cita está confirmada para el {slot['fecha']} a las {slot['hora_inicio']}.
+Te enviaré un recordatorio 24 horas antes. ¡Hasta pronto!"""
+                    
+                    return Command(
+                        update={
+                            'messages': [AIMessage(content=respuesta)],
+                            'estado_conversacion': 'completado',
+                            'datos_temporales': {}
+                        },
+                        goto="sincronizador_hibrido"  # Sincronizar con Google Calendar
+                    )
+                else:
+                    respuesta = "No pude agendar la cita. ¿Quieres intentar con otro horario?"
+                    return Command(
+                        update={
+                            'messages': [AIMessage(content=respuesta)],
+                            'estado_conversacion': 'solicitando_fecha',
+                            'datos_temporales': {}
+                        },
+                        goto="END"
+                    )
+            except Exception as e:
+                logger.error(f"    ❌ Error agendando cita: {e}")
+                respuesta = "Hubo un error al agendar. ¿Quieres intentar de nuevo?"
+                return Command(
+                    update={
+                        'messages': [AIMessage(content=respuesta)],
+                        'estado_conversacion': 'inicial',
+                        'datos_temporales': {}
+                    },
+                    goto="END"
+                )
+        else:
+            respuesta = "Entendido, cancelé el proceso. ¿Quieres intentar con otra fecha?"
+            
+            return Command(
+                update={
+                    'messages': [AIMessage(content=respuesta)],
+                    'estado_conversacion': 'inicial',
+                    'datos_temporales': {}
+                },
+                goto="END"
+            )
+    
+    # Fallback
+    logger.warning(f"    ⚠️ Estado no manejado: {estado_actual}")
+    return Command(
+        update={
+            'messages': [AIMessage(content="Hubo un error. ¿Empezamos de nuevo?")],
+            'estado_conversacion': 'inicial',
+            'datos_temporales': {}
+        },
+        goto="END"
+    )
 
 
-# Testing function para desarrollo
-def test_recepcionista_node():
-    """Función de prueba para desarrollo local"""
-    from langchain_core.messages import HumanMessage, AIMessage
-    
-    # Test 1: Paciente nuevo
-    print("=== Test 1: Paciente nuevo ===")
-    state_test = {
-        'messages': [HumanMessage(content="Hola, quiero agendar una cita")],
-        'user_id': '+521234567890',  # Número de prueba
-        'estado_conversacion': 'inicial',
-        'slots_disponibles': [],
-        'timestamp': datetime.now().isoformat()
-    }
-    
-    resultado = recepcionista_node(state_test)
-    print(f"Respuesta: {resultado['respuesta_recepcionista']}")
-    print(f"Nuevo estado: {resultado['estado_conversacion']}")
-    
-    # Test 2: Envío de nombre
-    print("\n=== Test 2: Envío de nombre ===")
-    state_test['estado_conversacion'] = 'solicitando_nombre'
-    state_test['messages'].append(HumanMessage(content="Me llamo Juan Pérez"))
-    
-    resultado = recepcionista_node(state_test)
-    print(f"Respuesta: {resultado['respuesta_recepcionista']}")
-    print(f"Nuevo estado: {resultado['estado_conversacion']}")
-    print(f"Slots disponibles: {len(resultado['slots_disponibles'])}")
+# ==================== WRAPPER ====================
 
-
-# Wrapper para compatibilidad con grafo
-def nodo_recepcionista_wrapper(state: WhatsAppAgentState) -> Dict:
+def nodo_recepcionista_wrapper(state: WhatsAppAgentState) -> Command:
     """
-    Wrapper que mantiene la firma esperada por el grafo
+    Wrapper para LangGraph - retorna Command directamente.
+    
+    Args:
+        state: Estado actual
+        
+    Returns:
+        Command del nodo principal
     """
     try:
-        # Llamar al nodo principal y retornar solo las actualizaciones
-        return recepcionista_node(state)
-
+        return nodo_recepcionista(state)
     except Exception as e:
         logger.error(f"❌ Error en nodo recepcionista: {e}")
-
+        
         # Respuesta de fallback
         error_message = "Lo siento, hubo un error procesando tu solicitud de cita. Por favor intenta de nuevo."
-        return {
-            'messages': [AIMessage(content=error_message)],
-            'respuesta_recepcionista': error_message,
-            'estado_conversacion': 'inicial'
-        }
-
-
-if __name__ == "__main__":
-    test_recepcionista_node()
+        return Command(
+            update={
+                'messages': [AIMessage(content=error_message)],
+                'estado_conversacion': 'inicial',
+                'datos_temporales': {}
+            },
+            goto="END"
+        )

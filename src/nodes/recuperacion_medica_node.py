@@ -19,12 +19,71 @@ from dotenv import load_dotenv
 import pytz
 
 from src.state.agent_state import WhatsAppAgentState
+from langgraph.types import Command
+from sentence_transformers import SentenceTransformer
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5434/agente_whatsapp")
 TIMEZONE = pytz.timezone("America/Tijuana")
+
+# ==================== MODELO DE EMBEDDINGS ====================
+
+# Cargar modelo una sola vez (singleton)
+_embedding_model = None
+
+def get_embedding_model():
+    """Obtiene modelo de embeddings (singleton para no recargar)."""
+    global _embedding_model
+    if _embedding_model is None:
+        logger.info("📦 Cargando modelo de embeddings (all-MiniLM-L6-v2)...")
+        _embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        logger.info("✅ Modelo de embeddings cargado")
+    return _embedding_model
+
+
+def generar_embedding(texto: str) -> List[float]:
+    """
+    Genera embedding de 384 dimensiones para búsqueda semántica.
+    
+    Args:
+        texto: Texto a convertir en embedding
+        
+    Returns:
+        Lista de 384 floats
+    """
+    try:
+        model = get_embedding_model()
+        embedding = model.encode(texto, show_progress_bar=False)
+        return embedding.tolist()
+    
+    except Exception as e:
+        logger.error(f"❌ Error generando embedding: {e}")
+        return None
+
+
+def obtener_ultimo_mensaje(state: Dict) -> str:
+    """Extrae último mensaje del usuario del state."""
+    messages = state.get('messages', [])
+    
+    for msg in reversed(messages):
+        if hasattr(msg, 'type') and msg.type == 'human':
+            return msg.content
+        elif isinstance(msg, dict) and msg.get('role') == 'user':
+            return msg.get('content', '')
+    
+    return ""
+
+
+# ==================== CONSTANTES ====================
+
+# Estados conversacionales que requieren saltar recuperación
+ESTADOS_FLUJO_ACTIVO = [
+    'ejecutando_herramienta',
+    'esperando_confirmacion_medica',
+    'procesando_resultado'
+]
 
 
 def obtener_pacientes_recientes(doctor_id: int, limit: int = 10) -> List[Dict]:
@@ -196,41 +255,10 @@ def buscar_historiales_semantica(
     Returns:
         Lista de historiales con similitud
     """
-    # Si no hay embedding, retornar historiales más recientes
+    # ✅ CAMBIO: Si no hay embedding, intentar retornar vacío (no fallback)
     if not query_embedding:
-        try:
-            with psycopg.connect(DATABASE_URL) as conn:
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        SELECT 
-                            h.id,
-                            h.paciente_id,
-                            p.nombre as paciente_nombre,
-                            h.nota,
-                            h.fecha
-                        FROM historiales_medicos h
-                        LEFT JOIN pacientes p ON h.paciente_id = p.id
-                        WHERE h.doctor_id = %s
-                        ORDER BY h.fecha DESC
-                        LIMIT %s
-                    """, (doctor_id, limit))
-                    
-                    historiales = []
-                    for row in cur.fetchall():
-                        historiales.append({
-                            "id": row[0],
-                            "paciente_id": row[1],
-                            "paciente_nombre": row[2],
-                            "nota": row[3],
-                            "fecha": row[4].isoformat() if row[4] else None,
-                            "similitud": None
-                        })
-                    
-                    return historiales
-        
-        except Exception as e:
-            logger.error(f"❌ Error obteniendo historiales recientes: {e}")
-            return []
+        logger.info("   ℹ️ Sin embedding de búsqueda - Retornando lista vacía")
+        return []
     
     # Búsqueda semántica con embeddings
     try:
@@ -239,33 +267,41 @@ def buscar_historiales_semantica(
                 # Convertir embedding a string de PostgreSQL
                 embedding_str = f"[{','.join(map(str, query_embedding))}]"
                 
+                # ✅ MEJORADO: Query con JOIN explícito y filtros
                 cur.execute("""
                     SELECT 
                         h.id,
                         h.paciente_id,
-                        p.nombre as paciente_nombre,
+                        p.nombre_completo as paciente_nombre,
                         h.nota,
                         h.fecha,
                         ROUND((1 - (h.embedding <=> %s::vector))::NUMERIC, 4) as similitud
                     FROM historiales_medicos h
-                    LEFT JOIN pacientes p ON h.paciente_id = p.id
+                    INNER JOIN pacientes p ON h.paciente_id = p.id
                     WHERE h.doctor_id = %s
                         AND h.embedding IS NOT NULL
+                        AND h.nota IS NOT NULL
+                        AND LENGTH(h.nota) > 10
                     ORDER BY h.embedding <=> %s::vector
                     LIMIT %s
                 """, (embedding_str, doctor_id, embedding_str, limit))
                 
                 historiales = []
                 for row in cur.fetchall():
-                    historiales.append({
-                        "id": row[0],
-                        "paciente_id": row[1],
-                        "paciente_nombre": row[2],
-                        "nota": row[3],
-                        "fecha": row[4].isoformat() if row[4] else None,
-                        "similitud": float(row[5]) if row[5] else None
-                    })
+                    similitud = float(row[5]) if row[5] else 0.0
+                    
+                    # Filtrar por similitud mínima (>0.5 = relevante)
+                    if similitud >= 0.5:
+                        historiales.append({
+                            "id": row[0],
+                            "paciente_id": row[1],
+                            "paciente_nombre": row[2],
+                            "nota": row[3],
+                            "fecha": row[4].isoformat() if row[4] else None,
+                            "similitud": similitud
+                        })
                 
+                logger.info(f"   ✅ Búsqueda semántica: {len(historiales)} historiales relevantes")
                 return historiales
     
     except Exception as e:
@@ -334,27 +370,29 @@ def formatear_contexto_medico(
     return "\n".join(contexto)
 
 
-def nodo_recuperacion_medica(state: WhatsAppAgentState) -> Dict:
+def nodo_recuperacion_medica(state: WhatsAppAgentState) -> Command:
     """
     Nodo de recuperación de contexto médico (Sin LLM)
     
-    Flujo:
-    1. Verifica que el usuario sea doctor
-    2. Recupera pacientes recientes (últimos 10)
-    3. Recupera citas del día actual
-    4. Recupera estadísticas del doctor
-    5. (Opcional) Búsqueda semántica en historiales
-    6. Formatea y retorna contexto
-    
-    Args:
-        state: WhatsAppAgentState
-        
-    Returns:
-        Dict con actualizaciones del state
+    MEJORAS APLICADAS:
+    ✅ Command pattern con routing directo
+    ✅ Búsqueda semántica funcional con embeddings
+    ✅ Detección de estado conversacional
     """
     logger.info("\n" + "=" * 70)
     logger.info("🏥 NODO: RECUPERACIÓN MÉDICA")
     logger.info("=" * 70)
+    
+    # ✅ NUEVA VALIDACIÓN: Si hay flujo activo, saltar recuperación
+    estado_conversacion = state.get("estado_conversacion", "inicial")
+    
+    if estado_conversacion in ESTADOS_FLUJO_ACTIVO:
+        logger.info(f"   🔄 Flujo activo detectado (estado: {estado_conversacion}) - Saltando recuperación")
+        
+        return Command(
+            update={'contexto_medico': None},
+            goto="seleccion_herramientas"
+        )
     
     # Verificar que sea doctor
     tipo_usuario = state.get("tipo_usuario", "")
@@ -362,11 +400,26 @@ def nodo_recuperacion_medica(state: WhatsAppAgentState) -> Dict:
     
     if tipo_usuario != "doctor" or not doctor_id:
         logger.info("ℹ️  Usuario no es doctor, saltando recuperación médica")
-        return {
-            "contexto_medico": None
-        }
+        return Command(
+            update={"contexto_medico": None},
+            goto="generacion_resumen"
+        )
     
     logger.info(f"👨‍⚕️ Doctor ID: {doctor_id}")
+    
+    # ✅ NUEVO: Generar embedding del mensaje para búsqueda semántica
+    mensaje_usuario = obtener_ultimo_mensaje(state)
+    query_embedding = None
+    
+    if mensaje_usuario:
+        logger.info(f"📝 Mensaje: {mensaje_usuario[:100]}...")
+        logger.info("🔍 Generando embedding para búsqueda semántica...")
+        query_embedding = generar_embedding(mensaje_usuario)
+        
+        if query_embedding:
+            logger.info(f"   ✅ Embedding generado: {len(query_embedding)} dimensiones")
+        else:
+            logger.warning("   ⚠️ No se pudo generar embedding")
     
     # Recuperar datos
     logger.info("📊 Recuperando estadísticas...")
@@ -379,11 +432,17 @@ def nodo_recuperacion_medica(state: WhatsAppAgentState) -> Dict:
     citas_hoy = obtener_citas_del_dia(doctor_id)
     
     logger.info("📋 Recuperando historiales relevantes...")
-    historiales = buscar_historiales_semantica(doctor_id, limit=5)
+    historiales = buscar_historiales_semantica(
+        doctor_id, 
+        query_embedding=query_embedding,  # ✅ Ahora SÍ pasa el embedding
+        limit=5
+    )
     
-    # Construir contexto médico
+    # Construir contexto médico estructurado
     contexto_medico = {
         "doctor_id": doctor_id,
+        "mensaje_procesado": mensaje_usuario,
+        "tiene_busqueda_semantica": query_embedding is not None,
         "estadisticas": estadisticas,
         "pacientes_recientes": pacientes_recientes,
         "citas_hoy": citas_hoy,
@@ -400,35 +459,16 @@ def nodo_recuperacion_medica(state: WhatsAppAgentState) -> Dict:
     )
     
     logger.info("\n" + contexto_formateado)
-    logger.info("\n✅ Recuperación médica completada\n")
+    logger.info("\n✅ Recuperación médica completada → Siguiente: seleccion_herramientas\n")
     
-    return {
-        "contexto_medico": contexto_medico
-    }
+    # ✅ Retornar Command (no Dict)
+    return Command(
+        update={"contexto_medico": contexto_medico},
+        goto="seleccion_herramientas"
+    )
 
 
 # Wrapper para compatibilidad con grafo
-def nodo_recuperacion_medica_wrapper(state: WhatsAppAgentState) -> WhatsAppAgentState:
-    """
-    Wrapper que mantiene la firma esperada por el grafo
-    """
-    try:
-        # Llamar al nodo principal
-        resultado = nodo_recuperacion_medica(state)
-        
-        # Actualizar state con resultado
-        state.update(resultado)
-        
-        # Retornar el estado completo
-        return state
-        
-    except Exception as e:
-        logger.error(f"❌ Error en nodo recuperación médica: {e}")
-        
-        # Respuesta de fallback
-        state["contexto_medico"] = {
-            "error": str(e),
-            "fallback": True
-        }
-        
-        return state
+def nodo_recuperacion_medica_wrapper(state: WhatsAppAgentState) -> Command:
+    """Wrapper para LangGraph - retorna Command directamente."""
+    return nodo_recuperacion_medica(state)

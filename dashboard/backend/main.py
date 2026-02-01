@@ -6,6 +6,7 @@ Expone API REST y WebSocket para visualización de logs en tiempo real.
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 import socketio
 from typing import Dict, List, Any
 from datetime import datetime
@@ -18,7 +19,23 @@ sio = socketio.AsyncServer(
     cors_allowed_origins=['http://localhost:3000']
 )
 
-app = FastAPI(title="WhatsApp Agent Dashboard API")
+# ==================== LIFESPAN ====================
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manejador de ciclo de vida del servidor."""
+    # Startup
+    print("🚀 Dashboard Backend iniciado")
+    print("   API: http://localhost:8000")
+    print("   Docs: http://localhost:8000/docs")
+    print("   WebSocket: ws://localhost:8000/ws")
+    
+    yield  # Servidor corriendo
+    
+    # Shutdown
+    print("👋 Dashboard Backend detenido")
+
+app = FastAPI(title="WhatsApp Agent Dashboard API", lifespan=lifespan)
 socket_app = socketio.ASGIApp(sio, app)
 
 # CORS para React
@@ -140,15 +157,6 @@ async def emit_log(log_data: Dict[str, Any]):
         'execution_id': execution_id,
         'nodes': executions[execution_id]['nodes']
     })
-
-# ==================== STARTUP ====================
-
-@app.on_event("startup")
-async def startup():
-    print("🚀 Dashboard Backend iniciado")
-    print("   API: http://localhost:8000")
-    print("   Docs: http://localhost:8000/docs")
-    print("   WebSocket: ws://localhost:8000/ws")
 
 if __name__ == "__main__":
     import uvicorn

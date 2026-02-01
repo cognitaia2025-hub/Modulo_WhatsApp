@@ -51,13 +51,13 @@ def test_detecta_estado_activo():
     assert resultado.goto == "generacion_resumen"
     assert resultado.update['herramientas_ejecutadas'] == []
 
-@pytest.mark.parametrize("estado", ESTADOS_FLUJO_ACTIVO)
-def test_detecta_todos_estados_activos(estado):
+@pytest.mark.parametrize("estado_conversacion", ESTADOS_FLUJO_ACTIVO)
+def test_detecta_todos_estados_activos(estado_conversacion):
     """Detecta todos los estados de flujo activo."""
     state = {
         'herramientas_seleccionadas': ['test'],
         'tipo_usuario': 'doctor',
-        'estado_conversacion': estado
+        'estado_conversacion': estado_conversacion
     }
     
     resultado = nodo_ejecucion_medica(state)

@@ -293,7 +293,7 @@ def nodo_ejecucion_medica(state: WhatsAppAgentState) -> Command:
     
     # ✅ NUEVA VALIDACIÓN: Detectar estado conversacional
     if estado_conversacion in ESTADOS_FLUJO_ACTIVO:
-        logger.info(f"   🔄 Flujo activo detectado (estado: {estado_conversacion}) - Saltando ejecución")
+        logger.info(f"    🔄 Flujo activo detectado (estado: {estado_conversacion}) - Saltando ejecución")
         return Command(
             update={
                 "resultado_herramientas": "Esperando confirmación del usuario",

@@ -1,497 +1,68 @@
----
-
 ```
-Crea un PR para implementar el Nodo 2B: Maya Detective de Intención para Doctores.
+Moderniza el nodo Recuperación Médica (N3B) para alinearlo con las mejores prácticas implementadas en Maya y Filtrado Inteligente: Command pattern, búsqueda semántica funcional con embeddings, y detección de estado conversacional.
 
 # Objetivo
-Implementar asistente conversacional "Maya" para doctores que responde consultas básicas del día sin activar flujo completo. Reduce latencia de 8 seg a ~1 seg en 60% de mensajes de doctores.
+Mejorar robustez, activar búsqueda semántica real con pgvector, y alinear con patrones del sistema (Command, estado conversacional).
 
-# Contexto
-Similar a Maya Paciente (PR #3) pero con diferencias clave:
-- Maya Paciente: Info ESTÁTICA (horarios, ubicación)
-- Maya Doctor: Info DINÁMICA (stats del día actual desde BD)
+# Problemas actuales
 
-# Diferencias vs Maya Paciente
+1. Retorna Dict en lugar de Command - routing separado
+2. Búsqueda semántica NUNCA se ejecuta - query_embedding siempre es None
+3. No detecta estado_conversacion activo - puede hacer queries innecesarias
+4. Sin tests unitarios (0 tests)
+5. Formato de contexto no estructurado para LLM
 
-| Aspecto | Maya Paciente | Maya Doctor |
-|---------|---------------|-------------|
-| Datos | Estáticos (hardcoded) | Dinámicos (query SQL) |
-| Responde | Horarios, ubicación | Stats día, próxima cita |
-| Escala a | recepcionista | recuperacion_medica |
-| Query | obtener_contexto_paciente() | obtener_resumen_dia_doctor() |
-| Max tokens | 300 | 400 |
+# Cambios requeridos
 
-# Mejoras Técnicas Críticas (LangGraph Recommendations)
+## 1. Instalar dependencia para embeddings
 
-## 1. Validación Pre-vuelo de doctor_id
-Verificar que doctor_id existe ANTES de llamar al LLM para evitar formateo fallido del prompt.
+Agregar a requirements.txt:
 
-## 2. Bloqueo de Recálculo Estricto
-Instrucción explícita en prompt para que Maya NO recalcule tiempos usando su "reloj interno".
+sentence-transformers==2.3.1
 
-## 3. Fixture de Tiempo para Tests
-Permitir inyectar `ahora` en tests para que "quién sigue" no dependa de hora real del test.
+## 2. Agregar generación de embeddings en src/nodes/recuperacion_medica_node.py
 
-## 4. Reseteo de Estado en Cache
-El nodo cache_sesion debe resetear estado_conversacion='inicial' si sesión > 24h.
+Después de los imports (línea ~26), agregar:
 
----
+from sentence_transformers import SentenceTransformer
+from typing import Literal
 
-# Archivos a crear/modificar
+# ==================== MODELO DE EMBEDDINGS ====================
 
-## 1. src/nodes/maya_detective_doctor_node.py
+# Cargar modelo una sola vez (singleton)
+_embedding_model = None
 
-```python
-"""
-Nodo 2B: Maya - Detective de Intención para Doctores (OPTIMIZADO)
+def get_embedding_model():
+    """Obtiene modelo de embeddings (singleton para no recargar)."""
+    global _embedding_model
+    if _embedding_model is None:
+        logger.info("📦 Cargando modelo de embeddings (all-MiniLM-L6-v2)...")
+        _embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        logger.info("✅ Modelo de embeddings cargado")
+    return _embedding_model
 
-Asistente conversacional que maneja consultas básicas de doctores sin activar
-flujo completo. Tiene acceso a estadísticas del día y puede responder preguntas
-rápidas sin llamar a herramientas complejas.
 
-MEJORAS TÉCNICAS APLICADAS:
-✅ Validación pre-vuelo de doctor_id
-✅ Bloqueo de recálculo en prompt
-✅ Tiempo inyectable para tests
-✅ Manejo robusto de errores
-
-TODO - OPTIMIZACIONES FUTURAS:
-- [ ] Connection pool PostgreSQL (psycopg_pool)
-- [ ] Queries async con asyncpg
-- [ ] Cache de resumen_dia (Redis, TTL 5min)
-"""
-
-import logging
-from typing import Literal, Dict, Any, Optional
-from pydantic import BaseModel, Field
-import pendulum
-import psycopg
-import os
-from dotenv import load_dotenv
-
-from langchain_openai import ChatOpenAI
-from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from langgraph.types import Command
-
-from src.state.agent_state import WhatsAppAgentState
-
-load_dotenv()
-
-logger = logging.getLogger(__name__)
-
-
-# ==================== ESQUEMA PYDANTIC ====================
-
-class MayaResponseDoctor(BaseModel):
-    """Respuesta estructurada de Maya para Doctores."""
-    
-    accion: Literal["responder_directo", "escalar_procedimental", "dejar_pasar"] = Field(
-        description="""
-        Acción a realizar:
-        - responder_directo: Maya responde con stats básicas del día
-        - escalar_procedimental: Necesita herramientas (buscar paciente, historial, modificar)
-        - dejar_pasar: Hay flujo activo, no interferir
-        """
-    )
-    
-    respuesta: str = Field(
-        default="",
-        description="Mensaje al doctor. SOLO si accion='responder_directo'. Máximo 3-4 líneas, 1 emoji máximo."
-    )
-    
-    razon: str = Field(
-        description="Breve explicación de por qué tomaste esta decisión (para logging)"
-    )
-
-
-# ==================== CONFIGURACIÓN LLM ====================
-
-llm_primary = ChatOpenAI(
-    model="deepseek-chat",
-    temperature=0.7,
-    max_tokens=400,
-    api_key=os.getenv("DEEPSEEK_API_KEY"),
-    base_url="https://api.deepseek.com/v1",
-    timeout=10.0,
-    max_retries=0
-)
-
-llm_fallback = ChatAnthropic(
-    model="claude-3-5-haiku-20241022",
-    temperature=0.7,
-    max_tokens=400,
-    api_key=os.getenv("ANTHROPIC_API_KEY"),
-    timeout=10.0,
-    max_retries=0
-)
-
-llm_maya_doctor = llm_primary.with_fallbacks([llm_fallback])
-structured_llm_doctor = llm_maya_doctor.with_structured_output(
-    MayaResponseDoctor,
-    method="json_schema",
-    strict=True
-)
-
-
-# ==================== PROMPT OPTIMIZADO ====================
-
-PROMPT_MAYA_DOCTOR = """Eres Maya, asistente de Podoskin Solutions.
-
-═══════════════════════════════════════════════════════════════
-TU PERSONALIDAD
-═══════════════════════════════════════════════════════════════
-
-• Tono: Casual, cercano, profesional pero no formal
-• Carismática pero genuina
-• Emojis: Máximo 1 por mensaje
-• Filosofía: Entender antes de ofrecer, escuchar antes de hablar
-
-═══════════════════════════════════════════════════════════════
-CONTEXTO ACTUAL
-═══════════════════════════════════════════════════════════════
-
-📅 Fecha actual: {fecha_actual}
-🕐 Hora actual: {hora_actual}
-📆 Día de la semana: {dia_semana}
-
-═══════════════════════════════════════════════════════════════
-INFORMACIÓN DEL DOCTOR
-═══════════════════════════════════════════════════════════════
-
-👨‍⚕️ Doctor: {nombre_doctor}
-📋 Especialidad: {especialidad}
-
-═══════════════════════════════════════════════════════════════
-RESUMEN DE TU DÍA
-═══════════════════════════════════════════════════════════════
-
-{resumen_dia}
-
-═══════════════════════════════════════════════════════════════
-TUS RESPONSABILIDADES
-═══════════════════════════════════════════════════════════════
-
-✅ RESPONDE DIRECTAMENTE (accion: "responder_directo") cuando:
-
-• Preguntan cuántas citas tienen HOY
-  "¿Cuántas citas tengo?" "¿Cuántos pacientes hoy?"
-  
-• Preguntan quién es el SIGUIENTE paciente
-  "¿Quién sigue?" "¿Quién es el próximo?"
-  
-• Preguntan cuántos pacientes atendieron HOY
-  "¿Cuántos he atendido?" "¿Cuántos me quedan?"
-  
-• Preguntan por stats básicas de HOY
-  "¿Cómo va mi día?" "Dame un resumen de hoy"
-  
-• Saludos y despedidas
-  "Hola" "Buenos días" "Gracias"
-
-❗ ESCALA (accion: "escalar_procedimental") cuando detectes:
-
-• Buscar paciente ESPECÍFICO por nombre
-  "Busca a Juan", "Info de María"
-  
-• Consultar HISTORIAL médico
-  "¿Qué diagnóstico tiene X?", "Notas de Y"
-  
-• MODIFICAR o CANCELAR cita
-  "Cancela mi cita", "Mueve la cita de Juan"
-  
-• Preguntas por OTRA FECHA (no hoy)
-  "¿Citas de mañana?", "¿Qué tengo el martes?"
-  
-• Consultas de PERIODOS largos
-  "¿Cuántos vi este mes?", "Pacientes de la semana"
-  
-• CREAR nueva cita
-  "Agenda a un paciente nuevo"
-  
-• Agregar NOTAS al historial
-  "Agrega nota para Juan"
-
-═══════════════════════════════════════════════════════════════
-⚠️ RESTRICCIONES CRÍTICAS
-═══════════════════════════════════════════════════════════════
-
-🚫 NUNCA RESPONDAS DIRECTAMENTE SI:
-
-1. Preguntan por OTRA FECHA que no sea HOY ({fecha_actual})
-   ❌ "¿Cuántas citas tengo mañana?" → ESCALAR
-   ❌ "¿Tengo algo el martes?" → ESCALAR
-   ❌ "¿Cuántas citas tuve ayer?" → ESCALAR
-   ✅ "¿Cuántas citas tengo hoy?" → RESPONDER
-   
-   **Razón:** Solo tienes datos de HOY en el resumen.
-
-2. Preguntan por información que NO ESTÁ en el resumen del día
-   ❌ "¿Cuál es el teléfono de Juan?" → ESCALAR
-   ❌ "¿Qué medicamentos toma María?" → ESCALAR
-   
-   **Regla de oro:** Si no está en el RESUMEN, ESCALA.
-
-3. Preguntan por paciente específico que NO es el siguiente
-   ✅ "¿Quién sigue?" → RESPONDER (está en PRÓXIMA CITA)
-   ❌ "¿A qué hora es Juan?" → ESCALAR (buscar necesario)
-
-═══════════════════════════════════════════════════════════════
-📊 USO DEL RESUMEN DEL DÍA - FORMATO ESTRICTO
-═══════════════════════════════════════════════════════════════
-
-⚠️ IMPORTANTE: NO RECALCULES NADA
-
-El resumen ya tiene TODO calculado. Usa los valores EXACTOS:
-
-1️⃣ **ESTADÍSTICAS** → Usa números tal cual
-   ✅ "Tienes 8 citas" (del resumen)
-   ❌ "Tienes aproximadamente 8 citas" (inventado)
-
-2️⃣ **PRÓXIMA CITA - TIEMPO** → Copia el tiempo exacto
-   ✅ "María a las 2:30pm (en 45 min)" (del resumen)
-   ❌ "María a las 2:30pm (calculando... en 47 min)" (recalculado)
-   
-   Si el resumen dice "(en 15 min)", escribe EXACTAMENTE eso.
-   NO uses {hora_actual} para recalcular.
-   NO consultes tu reloj interno.
-   
-3️⃣ **LISTA DE PACIENTES** → Solo menciona si están visibles
-   ✅ Mencionar pacientes que aparecen en "PACIENTES DEL DÍA"
-   ❌ Inventar pacientes que no están en la lista
-
-**Regla absoluta:** Eres un MENSAJERO del resumen, no un CALCULADOR.
-
-═══════════════════════════════════════════════════════════════
-REGLAS DE CONVERSACIÓN
-═══════════════════════════════════════════════════════════════
-
-1. Personaliza con el nombre del doctor
-2. Copia datos del RESUMEN sin modificar
-3. Si no está en el resumen → ESCALA
-4. Respuestas CORTAS: 3-4 líneas máx
-5. Un emoji por mensaje (opcional)
-
-═══════════════════════════════════════════════════════════════
-MANEJO DE FLUJOS ACTIVOS
-═══════════════════════════════════════════════════════════════
-
-Estado: {estado_conversacion}
-
-SI: ejecutando_herramienta, esperando_confirmacion, procesando
-→ accion: "dejar_pasar"
-
-SI: herramienta_completada, completado, inicial
-→ accion: "responder_directo" o "escalar_procedimental" según corresponda
-
-══════════════════════���════════════════════════════════════════
-EJEMPLOS
-═══════════════════════════════════════════════════════════════
-
-Usuario: "Hola"
-Maya: "Hola Dr. Santiago! Tienes 5 citas pendientes hoy 😊"
-
-Usuario: "¿Cuántas tengo hoy?"
-Maya: "Tienes 8 citas. Has completado 3 y te quedan 5"
-
-Usuario: "¿Quién sigue?"
-Maya: "María García a las 2:30pm (en 45 min)"
-(✅ Usa el tiempo EXACTO del resumen)
-
-Usuario: "¿Cuántas tengo mañana?"
-Maya: ESCALAR (fecha futura)
-
-Usuario: "Busca a Juan Pérez"
-Maya: ESCALAR (búsqueda específica)
-
-Usuario: "¿Qué diagnóstico tiene María?"
-Maya: ESCALAR (historial médico)
-"""
-
-
-# ==================== FUNCIONES AUXILIARES ====================
-
-def obtener_resumen_dia_doctor(doctor_id: int, ahora: Optional[pendulum.DateTime] = None) -> str:
+def generar_embedding(texto: str) -> List[float]:
     """
-    Obtiene resumen rápido del día del doctor.
-    
-    Query optimizada (~50ms) que trae:
-    - Stats del día (total, completadas, pendientes, canceladas)
-    - Próxima cita (paciente, hora, motivo)
-    - Lista de pacientes del día con estado
+    Genera embedding de 384 dimensiones para búsqueda semántica.
     
     Args:
-        doctor_id: ID del doctor
-        ahora: Tiempo actual (opcional, para tests)
+        texto: Texto a convertir en embedding
         
     Returns:
-        String formateado con resumen del día
+        Lista de 384 floats
     """
     try:
-        DATABASE_URL = os.getenv("DATABASE_URL")
-        tz = pendulum.timezone('America/Tijuana')
-        
-        # ✅ MEJORA 3: Permitir inyectar tiempo para tests
-        if ahora is None:
-            ahora = pendulum.now(tz)
-        
-        with psycopg.connect(DATABASE_URL) as conn:
-            with conn.cursor() as cur:
-                # Stats del día
-                query_stats = """
-                    SELECT 
-                        COUNT(*) as total_citas,
-                        SUM(CASE WHEN estado = 'completada' THEN 1 ELSE 0 END) as completadas,
-                        SUM(CASE WHEN estado = 'agendada' THEN 1 ELSE 0 END) as pendientes,
-                        SUM(CASE WHEN estado = 'cancelada' THEN 1 ELSE 0 END) as canceladas
-                    FROM citas_medicas
-                    WHERE doctor_id = %s
-                      AND DATE(fecha_hora_inicio) = CURRENT_DATE
-                """
-                
-                cur.execute(query_stats, (doctor_id,))
-                stats = cur.fetchone()
-                
-                if not stats or stats[0] == 0:
-                    return "📊 TUS ESTADÍSTICAS HOY:\n• No tienes citas agendadas para hoy\n• Día libre 🎉"
-                
-                total, completadas, pendientes, canceladas = stats
-                
-                # Próxima cita
-                query_proxima = """
-                    SELECT 
-                        p.nombre_completo,
-                        c.fecha_hora_inicio,
-                        c.motivo_consulta
-                    FROM citas_medicas c
-                    JOIN pacientes p ON p.id = c.paciente_id
-                    WHERE c.doctor_id = %s
-                      AND DATE(c.fecha_hora_inicio) = CURRENT_DATE
-                      AND c.estado = 'agendada'
-                      AND c.fecha_hora_inicio >= NOW()
-                    ORDER BY c.fecha_hora_inicio ASC
-                    LIMIT 1
-                """
-                
-                cur.execute(query_proxima, (doctor_id,))
-                proxima = cur.fetchone()
-                
-                # Lista de pacientes del día
-                query_lista = """
-                    SELECT 
-                        p.nombre_completo,
-                        c.fecha_hora_inicio,
-                        c.estado
-                    FROM citas_medicas c
-                    JOIN pacientes p ON p.id = c.paciente_id
-                    WHERE c.doctor_id = %s
-                      AND DATE(c.fecha_hora_inicio) = CURRENT_DATE
-                    ORDER BY c.fecha_hora_inicio ASC
-                    LIMIT 10
-                """
-                
-                cur.execute(query_lista, (doctor_id,))
-                lista_pacientes = cur.fetchall()
-                
-                # Formatear resumen
-                resumen = f"""📊 TUS ESTADÍSTICAS HOY:
-• Citas agendadas: {total or 0}
-• Completadas: {completadas or 0}
-• Pendientes: {pendientes or 0}"""
-                
-                if canceladas and canceladas > 0:
-                    resumen += f"\n• Canceladas: {canceladas}"
-                
-                # Agregar próxima cita
-                if proxima:
-                    nombre, hora, motivo = proxima
-                    hora_formateada = hora.strftime("%I:%M %p")
-                    
-                    # Calcular tiempo restante
-                    diferencia = hora - ahora
-                    minutos = int(diferencia.total_seconds() / 60)
-                    
-                    if minutos > 60:
-                        tiempo = f"en {minutos // 60}h {minutos % 60}min"
-                    elif minutos > 0:
-                        tiempo = f"en {minutos} min"
-                    else:
-                        tiempo = "¡ahora!"
-                    
-                    resumen += f"""
-
-🕐 PRÓXIMA CITA:
-• Paciente: {nombre}
-• Hora: {hora_formateada} ({tiempo})"""
-                    
-                    if motivo:
-                        resumen += f"\n• Motivo: {motivo}"
-                else:
-                    resumen += "\n\n🕐 No hay más citas pendientes hoy"
-                
-                # Agregar lista de pacientes
-                if lista_pacientes:
-                    resumen += "\n\n👥 PACIENTES DEL DÍA:"
-                    for idx, (nombre, hora, estado) in enumerate(lista_pacientes, 1):
-                        hora_str = hora.strftime("%I:%M %p")
-                        emoji = "✓" if estado == "completada" else "⏳" if estado == "agendada" else "✗"
-                        resumen += f"\n{idx}. {nombre} - {hora_str} {emoji}"
-                
-                return resumen
-                
-    except Exception as e:
-        logger.error(f"Error obteniendo resumen del día: {e}")
-        return "📊 TUS ESTADÍSTICAS HOY:\n• No se pudo cargar información del día\n• Intenta de nuevo en un momento"
-
-
-def obtener_info_doctor(doctor_id: int) -> Dict[str, str]:
-    """Obtiene información básica del doctor."""
-    try:
-        DATABASE_URL = os.getenv("DATABASE_URL")
-        
-        with psycopg.connect(DATABASE_URL) as conn:
-            with conn.cursor() as cur:
-                query = """
-                    SELECT nombre_completo, especialidad
-                    FROM doctores
-                    WHERE id = %s
-                """
-                
-                cur.execute(query, (doctor_id,))
-                result = cur.fetchone()
-                
-                if result:
-                    return {
-                        'nombre_completo': result[0],
-                        'especialidad': result[1] or 'Medicina General'
-                    }
-                else:
-                    return {
-                        'nombre_completo': 'Doctor',
-                        'especialidad': 'Medicina General'
-                    }
-                    
-    except Exception as e:
-        logger.error(f"Error obteniendo info doctor: {e}")
-        return {
-            'nombre_completo': 'Doctor',
-            'especialidad': 'Medicina General'
-        }
-
-
-def obtener_fecha_hora_actual() -> tuple:
-    """Obtiene fecha/hora en timezone Mexicali."""
-    tz = pendulum.timezone('America/Tijuana')
-    ahora = pendulum.now(tz)
+        model = get_embedding_model()
+        embedding = model.encode(texto, show_progress_bar=False)
+        return embedding.tolist()
     
-    fecha = ahora.format('dddd D [de] MMMM, YYYY', locale='es')
-    hora = ahora.format('h:mm A')
-    dia = ahora.format('dddd', locale='es').capitalize()
-    
-    return fecha, hora, dia
+    except Exception as e:
+        logger.error(f"❌ Error generando embedding: {e}")
+        return None
 
 
-def obtener_ultimo_mensaje(state: Dict[str, Any]) -> str:
+def obtener_ultimo_mensaje(state: Dict) -> str:
     """Extrae último mensaje del usuario del state."""
     messages = state.get('messages', [])
     
@@ -504,289 +75,221 @@ def obtener_ultimo_mensaje(state: Dict[str, Any]) -> str:
     return ""
 
 
-# ==================== NODO PRINCIPAL ====================
+# ==================== CONSTANTES ====================
 
-def nodo_maya_detective_doctor(state: WhatsAppAgentState) -> Command:
+# Estados conversacionales que requieren saltar recuperación
+ESTADOS_FLUJO_ACTIVO = [
+    'ejecutando_herramienta',
+    'esperando_confirmacion_medica',
+    'procesando_resultado'
+]
+
+## 3. Actualizar función buscar_historiales_semantica
+
+Reemplazar función buscar_historiales_semantica (líneas 188-276) con:
+
+def buscar_historiales_semantica(
+    doctor_id: int,
+    query_embedding: Optional[List[float]] = None,
+    limit: int = 5
+) -> List[Dict]:
     """
-    Nodo 2B: Maya Detective de Intención para Doctores.
+    Búsqueda semántica en historiales médicos usando embeddings
     
-    Similar a Maya Paciente pero con capacidades para responder
-    stats del día sin activar herramientas complejas.
+    Args:
+        doctor_id: ID del doctor
+        query_embedding: Vector de embedding para búsqueda (384 dims)
+        limit: Número máximo de resultados
+        
+    Returns:
+        Lista de historiales con similitud
+    """
+    # ✅ CAMBIO: Si no hay embedding, intentar retornar vacío (no fallback)
+    if not query_embedding:
+        logger.info("   ℹ️ Sin embedding de búsqueda - Retornando lista vacía")
+        return []
+    
+    # Búsqueda semántica con embeddings
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                # Convertir embedding a string de PostgreSQL
+                embedding_str = f"[{','.join(map(str, query_embedding))}]"
+                
+                # ✅ MEJORADO: Query con JOIN explícito y filtros
+                cur.execute("""
+                    SELECT 
+                        h.id,
+                        h.paciente_id,
+                        p.nombre_completo as paciente_nombre,
+                        h.nota,
+                        h.fecha,
+                        ROUND((1 - (h.embedding <=> %s::vector))::NUMERIC, 4) as similitud
+                    FROM historiales_medicos h
+                    INNER JOIN pacientes p ON h.paciente_id = p.id
+                    WHERE h.doctor_id = %s
+                        AND h.embedding IS NOT NULL
+                        AND h.nota IS NOT NULL
+                        AND LENGTH(h.nota) > 10
+                    ORDER BY h.embedding <=> %s::vector
+                    LIMIT %s
+                """, (embedding_str, doctor_id, embedding_str, limit))
+                
+                historiales = []
+                for row in cur.fetchall():
+                    similitud = float(row[5]) if row[5] else 0.0
+                    
+                    # Filtrar por similitud mínima (>0.5 = relevante)
+                    if similitud >= 0.5:
+                        historiales.append({
+                            "id": row[0],
+                            "paciente_id": row[1],
+                            "paciente_nombre": row[2],
+                            "nota": row[3],
+                            "fecha": row[4].isoformat() if row[4] else None,
+                            "similitud": similitud
+                        })
+                
+                logger.info(f"   ✅ Búsqueda semántica: {len(historiales)} historiales relevantes")
+                return historiales
+    
+    except Exception as e:
+        logger.error(f"❌ Error en búsqueda semántica: {e}")
+        return []
+
+## 4. Actualizar nodo_recuperacion_medica para usar Command
+
+Reemplazar función nodo_recuperacion_medica (líneas 338-407) con:
+
+def nodo_recuperacion_medica(state: WhatsAppAgentState) -> Command:
+    """
+    Nodo de recuperación de contexto médico (Sin LLM)
     
     MEJORAS APLICADAS:
-    ✅ Validación pre-vuelo de doctor_id
-    ✅ Manejo robusto de errores
-    ✅ Logging detallado
+    ✅ Command pattern con routing directo
+    ✅ Búsqueda semántica funcional con embeddings
+    ✅ Detección de estado conversacional
     """
     logger.info("\n" + "=" * 70)
-    logger.info("👨‍⚕️ NODO 2B: MAYA - DETECTIVE DOCTOR")
+    logger.info("🏥 NODO: RECUPERACIÓN MÉDICA")
     logger.info("=" * 70)
     
-    # ✅ MEJORA 1: Validación pre-vuelo de doctor_id
-    doctor_id = state.get('doctor_id')
+    # ✅ NUEVA VALIDACIÓN: Si hay flujo activo, saltar recuperación
+    estado_conversacion = state.get("estado_conversacion", "inicial")
     
-    if doctor_id is None:
-        logger.error("❌ ERROR CRÍTICO: doctor_id es None - No se puede continuar")
-        logger.error("   Estado recibido: %s", {k: v for k, v in state.items() if k != 'messages'})
+    if estado_conversacion in ESTADOS_FLUJO_ACTIVO:
+        logger.info(f"   🔄 Flujo activo detectado (estado: {estado_conversacion}) - Saltando recuperación")
+        
         return Command(
-            update={
-                'requiere_clasificacion_llm': True,
-                'error_maya': 'doctor_id_missing'
-            },
-            goto="filtrado_inteligente"
+            update={'contexto_medico': None},
+            goto="seleccion_herramientas"
         )
     
-    # Validar que sea un ID válido (entero > 0)
-    try:
-        doctor_id = int(doctor_id)
-        if doctor_id <= 0:
-            raise ValueError("doctor_id debe ser > 0")
-    except (ValueError, TypeError) as e:
-        logger.error(f"❌ doctor_id inválido: {doctor_id} ({type(doctor_id)})")
+    # Verificar que sea doctor
+    tipo_usuario = state.get("tipo_usuario", "")
+    doctor_id = state.get("doctor_id")
+    
+    if tipo_usuario != "doctor" or not doctor_id:
+        logger.info("ℹ️  Usuario no es doctor, saltando recuperación médica")
         return Command(
-            update={'requiere_clasificacion_llm': True},
-            goto="filtrado_inteligente"
-        )
-    
-    # Extraer mensaje
-    mensaje_usuario = obtener_ultimo_mensaje(state)
-    estado_conversacion = state.get('estado_conversacion', 'inicial')
-    
-    if not mensaje_usuario:
-        logger.warning("⚠️  Sin mensaje del usuario")
-        return Command(goto="generacion_resumen")
-    
-    logger.info(f"📝 Mensaje: {mensaje_usuario[:100]}...")
-    logger.info(f"📊 Estado conversación: {estado_conversacion}")
-    logger.info(f"👨‍⚕️ Doctor ID: {doctor_id}")
-    
-    # Obtener info del doctor
-    info_doctor = obtener_info_doctor(doctor_id)
-    
-    # Obtener resumen del día
-    resumen_dia = obtener_resumen_dia_doctor(doctor_id)
-    
-    # Obtener fecha/hora actual
-    fecha_actual, hora_actual, dia_semana = obtener_fecha_hora_actual()
-    
-    # Construir prompt
-    prompt_completo = PROMPT_MAYA_DOCTOR.format(
-        fecha_actual=fecha_actual,
-        hora_actual=hora_actual,
-        dia_semana=dia_semana,
-        nombre_doctor=info_doctor['nombre_completo'],
-        especialidad=info_doctor['especialidad'],
-        resumen_dia=resumen_dia,
-        estado_conversacion=estado_conversacion
-    )
-    
-    # Llamar LLM con structured output
-    try:
-        logger.info("🤖 Llamando a Maya Doctor (DeepSeek → Claude fallback)...")
-        
-        resultado: MayaResponseDoctor = structured_llm_doctor.invoke([
-            SystemMessage(content=prompt_completo),
-            HumanMessage(content=mensaje_usuario)
-        ])
-        
-        logger.info(f"✅ Acción decidida: {resultado.accion}")
-        logger.info(f"📋 Razón: {resultado.razon}")
-        
-        # Mapear acciones a nodos destino
-        destinos = {
-            "responder_directo": "generacion_resumen",
-            "escalar_procedimental": "recuperacion_medica",
-            "dejar_pasar": "seleccion_herramientas"
-        }
-        
-        goto = destinos.get(resultado.accion, "generacion_resumen")
-        
-        # Preparar updates según acción
-        updates = {}
-        
-        if resultado.accion == "responder_directo":
-            logger.info(f"💬 Respuesta directa: {resultado.respuesta}")
-            updates = {
-                "messages": [AIMessage(content=resultado.respuesta)],
-                "clasificacion_mensaje": "chat",
-                "requiere_clasificacion_llm": False
-            }
-        
-        elif resultado.accion == "escalar_procedimental":
-            logger.info(f"⬆️  Escalando a recuperación médica")
-            updates = {
-                "clasificacion_mensaje": "medica",
-                "requiere_clasificacion_llm": False
-            }
-        
-        elif resultado.accion == "dejar_pasar":
-            logger.info(f"➡️  Dejando pasar mensaje (flujo activo)")
-            updates = {
-                "requiere_clasificacion_llm": False
-            }
-        
-        # Retornar Command con update y goto
-        return Command(
-            update=updates,
-            goto=goto
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ Error en Maya Detective Doctor: {e}")
-        logger.exception("Stack trace completo:")
-        return Command(
-            update={
-                "messages": [AIMessage(content="Disculpa, ¿puedes repetir eso de otra forma?")],
-                "clasificacion_mensaje": "chat",
-                "error_maya": str(e)
-            },
+            update={"contexto_medico": None},
             goto="generacion_resumen"
         )
-
-
-# ==================== WRAPPER ====================
-
-def nodo_maya_detective_doctor_wrapper(state: WhatsAppAgentState) -> Command:
-    """Wrapper para LangGraph - retorna Command directamente."""
-    return nodo_maya_detective_doctor(state)
-```
-
-## 2. Modificar src/nodes/cache_sesion_node.py
-
-```python
-# ✅ MEJORA 4: Resetear estado_conversacion si sesión expirada
-
-def nodo_cache_sesion(state: WhatsAppAgentState, checkpointer=None) -> WhatsAppAgentState:
-    """
-    Nodo N1: Cache de Sesión con reseteo de estado.
-    """
-    logger.info("🗄️  [N1] CACHE_SESION - Verificando caché de sesión")
     
-    user_id = state.get('user_id', '')
+    logger.info(f"👨‍⚕️ Doctor ID: {doctor_id}")
     
-    # ... código existente de buscar sesión ...
+    # ✅ NUEVO: Generar embedding del mensaje para búsqueda semántica
+    mensaje_usuario = obtener_ultimo_mensaje(state)
+    query_embedding = None
     
-    if sesion_activa and sesion_activa['hours_inactive'] < SESSION_TTL_HOURS:
-        thread_id = sesion_activa['thread_id']
-        logger.info(f"    ✅ SESIÓN ACTIVA - Thread: {thread_id}")
+    if mensaje_usuario:
+        logger.info(f"📝 Mensaje: {mensaje_usuario[:100]}...")
+        logger.info("🔍 Generando embedding para búsqueda semántica...")
+        query_embedding = generar_embedding(mensaje_usuario)
         
-        # Recuperar mensajes y estado del checkpointer
-        if checkpointer:
-            mensajes_previos, estado_conversacion = recuperar_mensajes_checkpointer(thread_id, checkpointer)
-            
-            if mensajes_previos:
-                state['messages'] = mensajes_previos + state.get('messages', [])
-                logger.info(f"    📝 Contexto restaurado: {len(mensajes_previos)} mensajes")
-            
-            # Preservar estado conversacional si existe
-            if estado_conversacion != 'inicial':
-                state['estado_conversacion'] = estado_conversacion
-                logger.info(f"    🔄 Estado conversacional restaurado: {estado_conversacion}")
-        
-        state['session_id'] = thread_id
-        state['sesion_expirada'] = False
-        actualizar_actividad_sesion(thread_id, user_id)
+        if query_embedding:
+            logger.info(f"   ✅ Embedding generado: {len(query_embedding)} dimensiones")
+        else:
+            logger.warning("   ⚠️ No se pudo generar embedding")
     
-    else:
-        # Sesión nueva o expirada
-        logger.info(f"    🆕 SESIÓN NUEVA/EXPIRADA")
-        thread_id = crear_nueva_sesion(user_id, user_id)
-        
-        state['session_id'] = thread_id
-        state['sesion_expirada'] = True
-        
-        # ✅ MEJORA 4: Resetear estado_conversacion si sesión expiró
-        state['estado_conversacion'] = 'inicial'
-        logger.info(f"    🔄 Estado conversacional reseteado a 'inicial' (sesión expirada)")
-        
-        logger.info(f"    ✓ Nueva sesión: {thread_id}")
+    # Recuperar datos
+    logger.info("📊 Recuperando estadísticas...")
+    estadisticas = obtener_estadisticas_doctor(doctor_id)
     
-    state['timestamp'] = datetime.now().isoformat()
+    logger.info("👥 Recuperando pacientes recientes...")
+    pacientes_recientes = obtener_pacientes_recientes(doctor_id, limit=10)
     
-    logger.info(f"    ✅ Cache de sesión completado")
-    return state
-```
-
-## 3. Modificar src/graph_whatsapp.py
-
-```python
-# Import
-from src.nodes.maya_detective_doctor_node import nodo_maya_detective_doctor_wrapper
-
-# Agregar nodo después de maya_detective_paciente
-workflow.add_node("maya_detective_doctor", nodo_maya_detective_doctor_wrapper)
-
-# Actualizar decidir_desde_router():
-def decidir_desde_router(state: WhatsAppAgentState) -> Literal[...]:
-    """
-    Decide ruta según tipo de usuario.
+    logger.info("📅 Recuperando citas del día...")
+    citas_hoy = obtener_citas_del_dia(doctor_id)
     
-    Prioridad:
-    1. Pacientes externos → Maya Paciente
-    2. Doctores → Maya Doctor
-    3. Resto → Clasificador LLM
-    """
-    tipo_usuario = state.get('tipo_usuario', '')
-    ruta = state.get('ruta_siguiente', '')
+    logger.info("📋 Recuperando historiales relevantes...")
+    historiales = buscar_historiales_semantica(
+        doctor_id, 
+        query_embedding=query_embedding,  # ✅ Ahora SÍ pasa el embedding
+        limit=5
+    )
     
-    logger.info(f"🔀 Router - tipo_usuario: {tipo_usuario}, ruta: {ruta}")
-    
-    # Pacientes externos → Maya Paciente
-    if tipo_usuario == 'paciente_externo':
-        logger.info("   → Paciente externo: Maya Detective Paciente")
-        return 'maya_detective_paciente'
-    
-    # ✅ NUEVO: Doctores → Maya Doctor (excepto si ya viene de clasificador)
-    if tipo_usuario == 'doctor' and ruta != 'clasificador_llm':
-        logger.info("   → Doctor: Maya Detective Doctor")
-        return 'maya_detective_doctor'
-    
-    # Recepcionista directo
-    if tipo_usuario == 'recepcionista':
-        logger.info("   → Recepcionista: Flujo directo")
-        return 'recepcionista'
-    
-    # Admin o tipo desconocido → clasificador
-    logger.info("   → Clasificador LLM")
-    return 'filtrado_inteligente'
-
-# Actualizar conditional_edges para incluir maya_detective_doctor
-workflow.add_conditional_edges(
-    "router_identidad",
-    decidir_desde_router,
-    {
-        "recepcionista": "recepcionista",
-        "maya_detective_paciente": "maya_detective_paciente",
-        "maya_detective_doctor": "maya_detective_doctor",  # ✅ NUEVO
-        "filtrado_inteligente": "filtrado_inteligente"
+    # Construir contexto médico estructurado
+    contexto_medico = {
+        "doctor_id": doctor_id,
+        "mensaje_procesado": mensaje_usuario,
+        "tiene_busqueda_semantica": query_embedding is not None,
+        "estadisticas": estadisticas,
+        "pacientes_recientes": pacientes_recientes,
+        "citas_hoy": citas_hoy,
+        "historiales_relevantes": historiales,
+        "timestamp": datetime.now(TIMEZONE).isoformat()
     }
-)
-```
+    
+    # Formatear para logs
+    contexto_formateado = formatear_contexto_medico(
+        pacientes_recientes,
+        citas_hoy,
+        estadisticas,
+        historiales
+    )
+    
+    logger.info("\n" + contexto_formateado)
+    logger.info("\n✅ Recuperación médica completada → Siguiente: seleccion_herramientas\n")
+    
+    # ✅ Retornar Command (no Dict)
+    return Command(
+        update={"contexto_medico": contexto_medico},
+        goto="seleccion_herramientas"
+    )
 
-## 4. Tests completos (tests/test_maya_detective_doctor.py)
+## 5. Actualizar wrapper function
 
-Crear 18 tests mínimo usando CSV fixtures (PR #6):
+Reemplazar nodo_recuperacion_medica_wrapper (líneas 410-414) con:
 
-```python
+def nodo_recuperacion_medica_wrapper(state: WhatsAppAgentState) -> Command:
+    """Wrapper para LangGraph - retorna Command directamente."""
+    return nodo_recuperacion_medica(state)
+
+## 6. Crear tests unitarios en tests/test_recuperacion_medica.py
+
+Crear nuevo archivo con 15 tests:
+
 """
-Tests para Nodo 2B: Maya Detective de Intención - Doctores
+Tests para Nodo N3B: Recuperación Médica
 
 ✅ Usa CSV fixtures para tests rápidos
-✅ Mock de tiempo inyectable
-✅ Validación de doctor_id
+✅ Tests de búsqueda semántica con embeddings
+✅ Tests de Command pattern
 """
 
 import pytest
-import pendulum
-from unittest.mock import patch, Mock
-from langchain_core.messages import HumanMessage, AIMessage
+from unittest.mock import Mock, patch, MagicMock
+from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 
-from src.nodes.maya_detective_doctor_node import (
-    nodo_maya_detective_doctor,
-    obtener_resumen_dia_doctor,
-    obtener_info_doctor,
-    MayaResponseDoctor
+from src.nodes.recuperacion_medica_node import (
+    nodo_recuperacion_medica,
+    obtener_pacientes_recientes,
+    obtener_citas_del_dia,
+    obtener_estadisticas_doctor,
+    buscar_historiales_semantica,
+    generar_embedding
 )
 
 # ==================== FIXTURES ====================
@@ -797,132 +300,236 @@ def estado_base_doctor():
     return {
         'doctor_id': 1,
         'tipo_usuario': 'doctor',
-        'messages': [HumanMessage(content="Hola")],
+        'messages': [HumanMessage(content="Busca a Juan Pérez")],
         'estado_conversacion': 'inicial'
     }
 
 @pytest.fixture
-def mock_tiempo_fijo():
-    """Fixture de tiempo para tests consistentes."""
-    tz = pendulum.timezone('America/Tijuana')
-    # Fijar a 1:30 PM del 31 de enero 2026
-    return pendulum.datetime(2026, 1, 31, 13, 30, tz=tz)
+def estado_no_doctor():
+    """Estado de usuario que NO es doctor."""
+    return {
+        'tipo_usuario': 'paciente_externo',
+        'messages': [HumanMessage(content="Hola")],
+        'estado_conversacion': 'inicial'
+    }
 
+# ==================== TESTS BÁSICOS ====================
 
-# ==================== TESTS RESPONDER DIRECTO ====================
-
-@patch('src.nodes.maya_detective_doctor_node.structured_llm_doctor')
-@patch('src.nodes.maya_detective_doctor_node.obtener_resumen_dia_doctor')
-@patch('src.nodes.maya_detective_doctor_node.obtener_info_doctor')
-def test_maya_responde_saludo(mock_info, mock_resumen, mock_llm, estado_base_doctor):
-    """Maya responde saludo con stats del día."""
-    mock_info.return_value = {'nombre_completo': 'Dr. Santiago', 'especialidad': 'Podología'}
-    mock_resumen.return_value = "📊 TUS ESTADÍSTICAS HOY:\n• Citas: 8\n• Pendientes: 5"
-    mock_llm.invoke.return_value = MayaResponseDoctor(
-        accion="responder_directo",
-        respuesta="Hola Dr. Santiago! Tienes 5 citas pendientes hoy 😊",
-        razon="Saludo"
-    )
+@patch('src.nodes.recuperacion_medica_node.obtener_estadisticas_doctor')
+@patch('src.nodes.recuperacion_medica_node.obtener_pacientes_recientes')
+@patch('src.nodes.recuperacion_medica_node.obtener_citas_del_dia')
+@patch('src.nodes.recuperacion_medica_node.buscar_historiales_semantica')
+@patch('src.nodes.recuperacion_medica_node.generar_embedding')
+def test_recuperacion_medica_basica(mock_embed, mock_hist, mock_citas, mock_pac, mock_stats, estado_base_doctor):
+    """Test básico: Recupera contexto médico correctamente."""
+    mock_stats.return_value = {'citas_hoy': 5, 'citas_semana': 20}
+    mock_pac.return_value = [{'id': 1, 'nombre': 'Juan Pérez'}]
+    mock_citas.return_value = [{'id': 1, 'paciente_nombre': 'María'}]
+    mock_hist.return_value = [{'id': 1, 'nota': 'Consulta general'}]
+    mock_embed.return_value = [0.1] * 384
     
-    resultado = nodo_maya_detective_doctor(estado_base_doctor)
+    resultado = nodo_recuperacion_medica(estado_base_doctor)
+    
+    assert isinstance(resultado, Command)
+    assert resultado.goto == "seleccion_herramientas"
+    assert 'contexto_medico' in resultado.update
+    assert resultado.update['contexto_medico']['doctor_id'] == 1
+
+
+def test_no_doctor_salta_recuperacion(estado_no_doctor):
+    """Usuario que NO es doctor → salta recuperación."""
+    resultado = nodo_recuperacion_medica(estado_no_doctor)
     
     assert isinstance(resultado, Command)
     assert resultado.goto == "generacion_resumen"
-    assert 'messages' in resultado.update
+    assert resultado.update['contexto_medico'] is None
 
-# ... (más tests según PR #3 como referencia)
 
-# ==================== TESTS DE VALIDACIÓN ====================
-
-def test_maya_sin_doctor_id():
-    """✅ MEJORA 1: Valida que doctor_id es requerido."""
+def test_detecta_estado_activo():
+    """Detecta flujo activo y salta recuperación."""
     estado = {
-        'messages': [HumanMessage(content="Hola")],
-        'tipo_usuario': 'doctor'
-        # doctor_id ausente
+        'doctor_id': 1,
+        'tipo_usuario': 'doctor',
+        'messages': [HumanMessage(content="Test")],
+        'estado_conversacion': 'ejecutando_herramienta'
     }
     
-    resultado = nodo_maya_detective_doctor(estado)
+    resultado = nodo_recuperacion_medica(estado)
     
-    assert resultado.goto == "filtrado_inteligente"
-    assert resultado.update.get('requiere_clasificacion_llm') == True
-
-def test_maya_doctor_id_invalido():
-    """✅ MEJORA 1: Maneja doctor_id inválido."""
-    estado = {
-        'doctor_id': 'abc',  # String no convertible
-        'messages': [HumanMessage(content="Hola")]
-    }
-    
-    resultado = nodo_maya_detective_doctor(estado)
-    
-    assert resultado.goto == "filtrado_inteligente"
-
-def test_maya_doctor_id_negativo():
-    """✅ MEJORA 1: Rechaza doctor_id <= 0."""
-    estado = {
-        'doctor_id': -5,
-        'messages': [HumanMessage(content="Hola")]
-    }
-    
-    resultado = nodo_maya_detective_doctor(estado)
-    
-    assert resultado.goto == "filtrado_inteligente"
+    assert isinstance(resultado, Command)
+    assert resultado.goto == "seleccion_herramientas"
+    assert resultado.update['contexto_medico'] is None
 
 
-# ==================== TESTS DE TIEMPO INYECTABLE ====================
+# ==================== TESTS BÚSQUEDA SEMÁNTICA ====================
 
-@patch('src.nodes.maya_detective_doctor_node.psycopg.connect')
-def test_resumen_con_tiempo_inyectado(mock_connect, mock_tiempo_fijo):
-    """✅ MEJORA 3: Tiempo inyectable para tests consistentes."""
-    # Mock de BD
+@patch('src.nodes.recuperacion_medica_node.psycopg.connect')
+def test_busqueda_semantica_con_embedding(mock_connect):
+    """Búsqueda semántica funciona con embedding."""
     mock_cursor = Mock()
-    mock_cursor.fetchone.side_effect = [
-        (8, 3, 5, 0),  # Stats
-        ('María García', mock_tiempo_fijo.add(hours=1), 'Consulta'),  # Próxima (2:30pm)
-        []  # Lista vacía
+    mock_cursor.fetchall.return_value = [
+        (1, 101, 'Juan Pérez', 'Consulta general', '2026-01-15', 0.85)
     ]
-    mock_cursor.fetchall.return_value = []
     mock_connect.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value = mock_cursor
     
-    # Llamar con tiempo fijo
-    resumen = obtener_resumen_dia_doctor(1, ahora=mock_tiempo_fijo)
+    embedding = [0.1] * 384
+    historiales = buscar_historiales_semantica(1, query_embedding=embedding, limit=5)
     
-    # Verificar que el tiempo es "en 60 min" (no variable según hora real)
-    assert "en 60 min" in resumen or "en 1h 0min" in resumen
-```
+    assert len(historiales) == 1
+    assert historiales[0]['similitud'] == 0.85
+    assert historiales[0]['paciente_nombre'] == 'Juan Pérez'
 
-# Optimizaciones clave aplicadas
 
-1. ✅ **Validación pre-vuelo doctor_id** - Evita formateo fallido del prompt
-2. ✅ **Bloqueo de recálculo estricto** - Instrucción explícita "NO RECALCULES"
-3. ✅ **Tiempo inyectable** - Tests consistentes sin depender de hora real
-4. ✅ **Reseteo de estado en cache** - Sesiones expiradas limpian estado_conversacion
-5. ✅ **Command pattern** - Update + goto en un paso
-6. ✅ **Pydantic strict=True** - Schema validation
-7. ✅ **DeepSeek + Claude fallback** - Robustez
+def test_busqueda_semantica_sin_embedding():
+    """Sin embedding → retorna lista vacía."""
+    historiales = buscar_historiales_semantica(1, query_embedding=None, limit=5)
+    
+    assert historiales == []
+
+
+@patch('src.nodes.recuperacion_medica_node.get_embedding_model')
+def test_generar_embedding_funciona(mock_model):
+    """Genera embedding de 384 dimensiones."""
+    mock_model.return_value.encode.return_value = Mock(tolist=lambda: [0.1] * 384)
+    
+    embedding = generar_embedding("Busca paciente Juan")
+    
+    assert embedding is not None
+    assert len(embedding) == 384
+
+
+@patch('src.nodes.recuperacion_medica_node.get_embedding_model')
+def test_generar_embedding_maneja_error(mock_model):
+    """Maneja error al generar embedding."""
+    mock_model.side_effect = Exception("Model error")
+    
+    embedding = generar_embedding("Test")
+    
+    assert embedding is None
+
+
+# ==================== TESTS FUNCIONES AUXILIARES ====================
+
+@patch('src.nodes.recuperacion_medica_node.psycopg.connect')
+def test_obtener_pacientes_recientes(mock_connect):
+    """Obtiene últimos pacientes correctamente."""
+    mock_cursor = Mock()
+    mock_cursor.fetchall.return_value = [
+        (1, 'Juan Pérez', '+526641234567', 'juan@test.com', '2026-01-31', 5)
+    ]
+    mock_connect.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value = mock_cursor
+    
+    pacientes = obtener_pacientes_recientes(1, limit=10)
+    
+    assert len(pacientes) == 1
+    assert pacientes[0]['nombre'] == 'Juan Pérez'
+    assert pacientes[0]['total_citas'] == 5
+
+
+@patch('src.nodes.recuperacion_medica_node.psycopg.connect')
+def test_obtener_citas_del_dia(mock_connect):
+    """Obtiene citas del día correctamente."""
+    mock_cursor = Mock()
+    mock_cursor.fetchall.return_value = [
+        (1, 'María García', '2026-01-31 09:00:00', 'agendada', 'Consulta')
+    ]
+    mock_connect.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value = mock_cursor
+    
+    citas = obtener_citas_del_dia(1)
+    
+    assert len(citas) == 1
+    assert citas[0]['paciente_nombre'] == 'María García'
+
+
+@patch('src.nodes.recuperacion_medica_node.psycopg.connect')
+def test_obtener_estadisticas_doctor(mock_connect):
+    """Obtiene estadísticas correctamente."""
+    mock_cursor = Mock()
+    mock_cursor.fetchone.side_effect = [
+        ({'citas_hoy': 5, 'citas_semana': 20, 'pacientes_totales': 100},)
+    ]
+    mock_connect.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value = mock_cursor
+    
+    stats = obtener_estadisticas_doctor(1)
+    
+    assert stats['citas_hoy'] == 5
+    assert stats['citas_semana'] == 20
+
+
+# ==================== TESTS EDGE CASES ====================
+
+def test_doctor_id_none():
+    """doctor_id None → salta recuperación."""
+    estado = {
+        'doctor_id': None,
+        'tipo_usuario': 'doctor',
+        'messages': [HumanMessage(content="Test")]
+    }
+    
+    resultado = nodo_recuperacion_medica(estado)
+    
+    assert isinstance(resultado, Command)
+    assert resultado.update['contexto_medico'] is None
+
+
+@patch('src.nodes.recuperacion_medica_node.obtener_estadisticas_doctor')
+def test_error_en_query_no_rompe_flujo(mock_stats, estado_base_doctor):
+    """Error en query no rompe el flujo."""
+    mock_stats.side_effect = Exception("DB error")
+    
+    # Patch otras funciones para que funcionen
+    with patch('src.nodes.recuperacion_medica_node.obtener_pacientes_recientes', return_value=[]):
+        with patch('src.nodes.recuperacion_medica_node.obtener_citas_del_dia', return_value=[]):
+            with patch('src.nodes.recuperacion_medica_node.buscar_historiales_semantica', return_value=[]):
+                with patch('src.nodes.recuperacion_medica_node.generar_embedding', return_value=None):
+                    resultado = nodo_recuperacion_medica(estado_base_doctor)
+    
+    assert isinstance(resultado, Command)
+    assert resultado.goto == "seleccion_herramientas"
+
+
+def test_mensaje_vacio_funciona():
+    """Mensaje vacío no rompe generación de embedding."""
+    estado = {
+        'doctor_id': 1,
+        'tipo_usuario': 'doctor',
+        'messages': [],
+        'estado_conversacion': 'inicial'
+    }
+    
+    with patch('src.nodes.recuperacion_medica_node.obtener_estadisticas_doctor', return_value={}):
+        with patch('src.nodes.recuperacion_medica_node.obtener_pacientes_recientes', return_value=[]):
+            with patch('src.nodes.recuperacion_medica_node.obtener_citas_del_dia', return_value=[]):
+                with patch('src.nodes.recuperacion_medica_node.buscar_historiales_semantica', return_value=[]):
+                    resultado = nodo_recuperacion_medica(estado)
+    
+    assert isinstance(resultado, Command)
 
 # Criterios de aceptación
 
-- [x] Pydantic structured output funcionando
-- [x] Command pattern implementado
-- [x] Validación pre-vuelo de doctor_id
-- [x] Maya responde stats del día correctamente
-- [x] Maya NO recalcula tiempos (usa valores del resumen)
-- [x] Maya ESCALA cuando preguntan por otra fecha
-- [x] Cache resetea estado_conversacion en sesiones expiradas
-- [x] 18+ tests pasando (incluyendo validaciones y tiempo inyectable)
-- [x] Integrado al grafo correctamente
-- [x] Logs detallados con stack traces en errores
+- Command pattern implementado (retorna Command, no Dict)
+- Búsqueda semántica funcional (genera embeddings reales)
+- Detecta estado_conversacion activo y salta recuperación
+- 15 tests pasando (búsqueda semántica, Command, edge cases)
+- Embedding model se carga una sola vez (singleton)
+- Contexto médico estructurado con flag tiene_busqueda_semantica
+- Alineado con patrones de Maya/Filtrado
+
+# Validación manual
+
+Después de implementar, probar:
+
+1. Doctor pregunta "Busca a Juan" → Genera embedding, busca historiales relevantes
+2. Usuario no doctor → Salta recuperación, goto="generacion_resumen"
+3. Estado activo → Salta recuperación, goto="seleccion_herramientas"
+4. Query sin resultados → No rompe flujo, retorna contexto vacío
 
 # Referencias
 
-- PR #3 (Maya Paciente) - Estructura base
-- PR #2 (Cache Sesión) - Modificación estado_conversacion
-- PR #6 (CSV Fixtures) - Tests rápidos
-- LangGraph docs: Command routing, Unit testing
+- PR #3: Maya Paciente (Command pattern)
+- PR #10: Filtrado Inteligente (Command + estado)
+- pgvector docs: Búsqueda vectorial con <=> operator
+- sentence-transformers: all-MiniLM-L6-v2 (384 dims)
 
 Repositorio: cognitaia2025-hub/Modulo_WhatsApp
 ```
-
----

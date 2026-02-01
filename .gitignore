@@ -6,6 +6,13 @@ __pycache__/
 *.venv
 venv/
 
+# Node.js / Frontend
+node_modules/
+dist/
+build/
+.next/
+*.tsbuildinfo
+
 # Environment variables
 .env
 .env.*

@@ -48,6 +48,14 @@ async def lifespan(app: FastAPI):
     """
     # Startup
     logger.info("🚀 Iniciando servidor FastAPI...")
+    
+    # Intentar activar dashboard integration
+    try:
+        from src.utils.logging_config import setup_dashboard_integration
+        setup_dashboard_integration()
+    except Exception as e:
+        logger.debug(f"Dashboard integration no disponible: {e}")
+    
     logger.info("📦 Pre-cargando modelo de embeddings...")
     
     try:
@@ -66,6 +74,7 @@ async def lifespan(app: FastAPI):
     
     # Shutdown (opcional)
     logger.info("👋 Servidor detenido")
+
 
 
 app = FastAPI(lifespan=lifespan)

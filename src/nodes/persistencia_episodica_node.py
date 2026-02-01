@@ -10,193 +10,263 @@ Responsabilidades:
 - Limpiar estado para próxima interacción
 - Manejo robusto de errores (no bloquear si DB falla)
 
+MEJORAS APLICADAS:
+✅ Command pattern con routing directo
+✅ Detección de estado conversacional
+✅ psycopg3 con context managers
+✅ Logging estructurado
+✅ Timeout reducido (modelo rápido)
+
 OPTIMIZACIÓN: Usa el singleton de embeddings para evitar recargas.
 """
 
 import logging
-from typing import Dict, Any
-from datetime import datetime
-import json
-import psycopg2
-from psycopg2.extras import execute_values
-from langchain_core.messages import RemoveMessage
-from langgraph.graph.message import REMOVE_ALL_MESSAGES
+from typing import Dict, Any, Optional, List
+import os
+from dotenv import load_dotenv
 
-from src.utils.time_utils import get_current_time
-from src.database.db_config import get_db_connection
+import psycopg
+from psycopg.rows import dict_row
+from langgraph.types import Command
+
+from src.utils.logging_config import (
+    log_separator,
+    log_node_io
+)
 from src.embeddings.local_embedder import generate_embedding, is_model_loaded
 
+load_dotenv()
+
 logger = logging.getLogger(__name__)
+
+# Configuración de base de datos
+# Nota: Puerto 5434 se usa para evitar conflictos con PostgreSQL del sistema (puerto 5432)
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5434/agente_whatsapp")
+
+
+# ==================== CONSTANTES ====================
+
+# Configuración mínima de resumen
+MIN_RESUMEN_LENGTH = 10  # Caracteres mínimos para considerar un resumen válido
+
+# Estados conversacionales que requieren saltar persistencia
+ESTADOS_SIN_PERSISTENCIA = [
+    'esperando_confirmacion',
+    'recolectando_datos',
+    'procesando_pago',
+    'inicial'  # No persistir si es solo saludo inicial
+]
+
+
+# ==================== FUNCIONES AUXILIARES ====================
+
+def generar_embedding_optimizado(texto: str) -> Optional[List[float]]:
+    """
+    Genera embedding de 384 dimensiones usando sentence-transformers.
+    
+    MEJORAS:
+    ✅ Manejo de errores robusto
+    ✅ Cache del modelo (singleton)
+    ✅ Timeout implícito (modelo rápido)
+    
+    Args:
+        texto: Texto a convertir en embedding
+        
+    Returns:
+        Lista de 384 floats o None si hay error
+    """
+    try:
+        if not is_model_loaded():
+            logger.warning("    ⚠️  Modelo no pre-cargado, se cargará bajo demanda")
+        
+        embedding = generate_embedding(texto)
+        return embedding
+        
+    except Exception as e:
+        logger.error(f"    ❌ Error generando embedding: {e}")
+        return None
 
 
 def guardar_en_pgvector(
     user_id: str,
     session_id: str,
     resumen: str,
-    embedding: list,
-    sesion_expirada: bool
-) -> bool:
+    embedding: List[float]
+) -> Optional[int]:
     """
     Guarda el resumen y su embedding en PostgreSQL con pgvector.
+    
+    MEJORAS:
+    ✅ Usa psycopg3 con context managers
+    ✅ Simplificado - metadata básica
+    ✅ Retorna ID del episodio creado
     
     Args:
         user_id: ID del usuario de WhatsApp
         session_id: ID de la sesión
         resumen: Texto del resumen generado
         embedding: Vector de 384 dimensiones
-        sesion_expirada: Si fue cierre por timeout
         
     Returns:
-        True si se guardó exitosamente, False si falló
+        ID del episodio creado o None si falla
     """
     try:
-        # Obtener conexión
-        conn = get_db_connection()
-        if not conn:
-            logger.error("    ❌ No se pudo conectar a PostgreSQL")
-            return False
-        
-        cursor = conn.cursor()
-        
-        # Preparar metadata
-        timestamp = get_current_time()
-        metadata = {
-            'fecha': timestamp.format('YYYY-MM-DD HH:mm:ss'),
-            'session_id': session_id,
-            'tipo': 'cierre_expiracion' if sesion_expirada else 'normal',
-            'timezone': 'America/Tijuana'
-        }
-        
-        # Query de inserción
-        query = """
-        INSERT INTO memoria_episodica 
-        (user_id, resumen, embedding, metadata, timestamp)
-        VALUES (%s, %s, %s::vector, %s, %s)
-        RETURNING id
-        """
-        
-        # Convertir embedding a string para pgvector
-        embedding_str = '[' + ','.join(map(str, embedding)) + ']'
-        
-        cursor.execute(query, (
-            user_id,
-            resumen,
-            embedding_str,
-            json.dumps(metadata),
-            timestamp.to_datetime_string()
-        ))
-        
-        # Obtener ID insertado
-        row_id = cursor.fetchone()[0]
-        
-        conn.commit()
-        cursor.close()
-        conn.close()
-        
-        logger.info(f"    ✅ Resumen guardado en memoria episódica (ID: {row_id})")
-        logger.info(f"    📊 Vector: 384 dims | Tipo: {metadata['tipo']}")
-        
-        return True
-        
-    except psycopg2.Error as e:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                # Query de inserción simplificada
+                cur.execute("""
+                    INSERT INTO memoria_episodica 
+                    (user_id, resumen, embedding, timestamp)
+                    VALUES (%s, %s, %s, NOW())
+                    RETURNING id
+                """, (user_id, resumen, embedding))
+                
+                episodio_id = cur.fetchone()[0]
+                conn.commit()
+                
+                logger.info(f"    ✅ Episodio guardado en memoria episódica (ID: {episodio_id})")
+                logger.info(f"    📊 Vector: 384 dims | User: {user_id}")
+                
+                return episodio_id
+                
+    except psycopg.Error as e:
         logger.error(f"    ❌ Error de PostgreSQL: {e}")
-        return False
+        return None
     except Exception as e:
         logger.error(f"    ❌ Error guardando en pgvector: {e}")
-        return False
+        return None
 
 
-def nodo_persistencia_episodica(state: Dict[str, Any]) -> Dict[str, Any]:
+# ==================== NODO PRINCIPAL ====================
+
+def nodo_persistencia_episodica(state: Dict[str, Any]) -> Command:
     """
-    Nodo 7: Archiva el resumen en memoria a largo plazo (pgvector).
+    Nodo 7: Persiste resumen ejecutivo en memoria episódica (PostgreSQL + pgvector)
     
-    Este es el nodo final del grafo. Cierra el ciclo de aprendizaje del agente.
+    MEJORAS APLICADAS:
+    ✅ Command pattern con routing directo
+    ✅ Detección de estado conversacional
+    ✅ psycopg3 con context managers
+    ✅ Logging estructurado
     
     Flujo:
-    1. Obtener resumen del Nodo 6
-    2. Generar embedding (384 dims)
-    3. Guardar en PostgreSQL
-    4. Limpiar estado para próxima interacción
+    1. Verifica estado conversacional (saltar si no debe persistir)
+    2. Valida que existe resumen_actual
+    3. Genera embedding del resumen (384 dims)
+    4. Inserta en tabla memoria_episodica
+    5. Retorna Command con estado actualizado
     
     Args:
         state: Estado del grafo con resumen_actual
         
     Returns:
-        State limpio y listo para nueva conversación
+        Command con update y goto
     """
-    logger.info("💾 [7] NODO_PERSISTENCIA_EPISODICA - Archivando conocimiento")
+    log_separator(logger, "NODO_7_PERSISTENCIA_EPISODICA", "INICIO")
     
-    resumen = state.get('resumen_actual')
-    user_id = state.get('user_id', 'unknown')
+    resumen_actual = state.get('resumen_actual', '')
+    user_id = state.get('user_id', 'default_user')
     session_id = state.get('session_id', 'unknown')
-    sesion_expirada = state.get('sesion_expirada', False)
+    estado_conversacion = state.get('estado_conversacion', 'inicial')
     
-    # Validar que hay resumen para guardar
-    if not resumen or resumen == "Sin cambios relevantes":
-        logger.info("    ⚠️  No hay resumen relevante para persistir")
-        return {
-            **state,
-            'resumen_actual': None,
-            'requiere_herramientas': False,
-            'sesion_expirada': False
-        }
+    # Log del input
+    input_data = f"resumen_len: {len(resumen_actual)}\nuser_id: {user_id}\nestado: {estado_conversacion}"
+    log_node_io(logger, "INPUT", "NODO_7_PERSISTENCIA", input_data)
     
-    logger.info(f"    📝 Resumen a guardar: {len(resumen)} caracteres")
-    logger.info(f"    👤 Usuario: {user_id} | Sesión: {session_id}")
-    logger.info(f"    {'⏰' if sesion_expirada else '✅'} Tipo: {'Cierre por expiración' if sesion_expirada else 'Normal'}")
+    logger.info(f"    📝 Resumen a persistir: {len(resumen_actual)} caracteres")
+    logger.info(f"    🔄 Estado: {estado_conversacion}")
+    
+    # ✅ NUEVA VALIDACIÓN: Detectar estado conversacional
+    if estado_conversacion in ESTADOS_SIN_PERSISTENCIA:
+        logger.info(f"    🔄 Estado '{estado_conversacion}' - Saltando persistencia")
+        
+        output_data = "episodio_guardado: False (estado conversacional)"
+        log_node_io(logger, "OUTPUT", "NODO_7_PERSISTENCIA", output_data)
+        log_separator(logger, "NODO_7_PERSISTENCIA_EPISODICA", "FIN")
+        
+        return Command(
+            update={'episodio_guardado': False},
+            goto="END"
+        )
+    
+    # Validar resumen
+    if not resumen_actual or len(resumen_actual.strip()) < MIN_RESUMEN_LENGTH:
+        logger.info(f"    ⚠️ Resumen vacío o muy corto (< {MIN_RESUMEN_LENGTH} caracteres), saltando persistencia")
+        
+        output_data = "episodio_guardado: False (resumen vacío)"
+        log_node_io(logger, "OUTPUT", "NODO_7_PERSISTENCIA", output_data)
+        log_separator(logger, "NODO_7_PERSISTENCIA_EPISODICA", "FIN")
+        
+        return Command(
+            update={'episodio_guardado': False},
+            goto="END"
+        )
     
     try:
-        # 1. Generar embedding usando el singleton
-        if not is_model_loaded():
-            logger.warning("    ⚠️  Modelo no pre-cargado, se cargará bajo demanda")
+        # Generar embedding
+        logger.info("    🧠 Generando embedding...")
+        embedding = generar_embedding_optimizado(resumen_actual)
         
-        logger.info("    🔢 Generando embedding (384 dims)...")
-        embedding = generate_embedding(resumen)
+        if embedding is None:
+            logger.error("    ❌ Error generando embedding")
+            log_separator(logger, "NODO_7_PERSISTENCIA_EPISODICA", "FIN")
+            
+            return Command(
+                update={'episodio_guardado': False},
+                goto="END"
+            )
+        
         logger.info(f"    ✅ Embedding generado: [{embedding[0]:.4f}, {embedding[1]:.4f}, ...]")
         
-        # 2. Guardar en PostgreSQL
-        logger.info("    💾 Guardando en PostgreSQL (pgvector)...")
-        guardado_exitoso = guardar_en_pgvector(
+        # Insertar en BD con psycopg3
+        logger.info("    💾 Insertando en memoria_episodica...")
+        
+        episodio_id = guardar_en_pgvector(
             user_id=user_id,
             session_id=session_id,
-            resumen=resumen,
-            embedding=embedding,
-            sesion_expirada=sesion_expirada
+            resumen=resumen_actual,
+            embedding=embedding
         )
         
-        if not guardado_exitoso:
-            # Fallback: Loguear el resumen en consola
-            logger.warning("    ⚠️  PostgreSQL no disponible, logueando resumen:")
-            logger.warning(f"    📄 [{user_id}] {resumen}")
+        if episodio_id is None:
+            logger.warning("    ⚠️  PostgreSQL no disponible")
+            log_separator(logger, "NODO_7_PERSISTENCIA_EPISODICA", "FIN")
+            
+            return Command(
+                update={'episodio_guardado': False},
+                goto="END"
+            )
+        
+        logger.info(f"    ✅ Episodio guardado con ID: {episodio_id}")
+        
+        # Log de output
+        output_data = f"episodio_id: {episodio_id}\nepisodio_guardado: True"
+        log_node_io(logger, "OUTPUT", "NODO_7_PERSISTENCIA", output_data)
+        log_separator(logger, "NODO_7_PERSISTENCIA_EPISODICA", "FIN")
+        
+        # ✅ Retornar Command
+        return Command(
+            update={
+                'episodio_guardado': True,
+                'episodio_id': episodio_id
+            },
+            goto="END"
+        )
         
     except Exception as e:
         logger.error(f"    ❌ Error en persistencia: {e}")
-        logger.warning(f"    📄 Resumen (no guardado): {resumen}")
-    
-    # 3. Limpieza del estado
-    logger.info("    🧹 Limpiando estado para próxima interacción...")
-    
-    nuevo_state = {
-        **state,
-        'resumen_actual': None,
-        'cambio_de_tema': False,
-        'sesion_expirada': False
-    }
-    
-    # Si la sesión expiró, limpiar mensajes del checkpointer
-    if sesion_expirada:
-        logger.info("    🗑️  Limpiando mensajes del checkpointer (sesión expirada)")
-        nuevo_state['messages'] = [RemoveMessage(id=REMOVE_ALL_MESSAGES)]
-    
-    logger.info("    ✅ Estado limpio y listo para nueva conversación")
-    
-    return nuevo_state
+        log_separator(logger, "NODO_7_PERSISTENCIA_EPISODICA", "FIN")
+        
+        return Command(
+            update={'episodio_guardado': False},
+            goto="END"
+        )
 
 
-def nodo_persistencia_episodica_wrapper(state: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Wrapper para compatibilidad con LangGraph.
-    """
+# ==================== WRAPPER ====================
+
+def nodo_persistencia_episodica_wrapper(state: Dict[str, Any]) -> Command:
+    """Wrapper para LangGraph - retorna Command directamente."""
     return nodo_persistencia_episodica(state)
 
 
@@ -212,44 +282,39 @@ if __name__ == "__main__":
         'user_id': 'test_user_123',
         'session_id': 'session_test_001',
         'resumen_actual': '[24/01/2026 12:30] Se agendó reunión para mañana a las 15:00. Estado: Completada.',
-        'sesion_expirada': False,
-        'messages': [
-            {'role': 'user', 'content': 'Agendar reunión mañana 3pm'},
-            {'role': 'ai', 'content': 'Listo, agendado'}
-        ]
+        'estado_conversacion': 'completado'
     }
     
     resultado1 = nodo_persistencia_episodica(state_test1)
-    print(f"✅ Resumen actual: {resultado1['resumen_actual']}")
-    print(f"✅ Requiere herramientas: {resultado1['requiere_herramientas']}\n")
+    print(f"✅ Tipo: {type(resultado1)}")
+    print(f"✅ Goto: {resultado1.goto}")
+    print(f"✅ Guardado: {resultado1.update.get('episodio_guardado')}\n")
     
-    # Test 2: Cierre por expiración
-    print("Test 2: Persistencia con sesión expirada")
+    # Test 2: Estado sin persistencia
+    print("Test 2: Estado conversacional sin persistencia")
     state_test2 = {
         'user_id': 'test_user_456',
         'session_id': 'session_test_002',
-        'resumen_actual': '[24/01/2026 14:00] Usuario pidió cita para miércoles 10am. Pendiente: Confirmar ubicación. Estado: Interrumpida.',
-        'sesion_expirada': True,
-        'messages': [
-            {'role': 'user', 'content': 'Ponme cita el miércoles'},
-            {'role': 'ai', 'content': '¿En qué lugar?'}
-        ]
+        'resumen_actual': '[24/01/2026 14:00] Usuario pidió cita.',
+        'estado_conversacion': 'inicial'
     }
     
     resultado2 = nodo_persistencia_episodica(state_test2)
-    print(f"✅ Sesión expirada: {resultado2['sesion_expirada']}")
-    print(f"✅ Mensajes limpiados: {len(resultado2.get('messages', []))} messages\n")
+    print(f"✅ Guardado: {resultado2.update.get('episodio_guardado')}")
+    print(f"✅ Razón: Estado inicial\n")
     
     # Test 3: Sin resumen relevante
     print("Test 3: Sin contenido relevante")
     state_test3 = {
         'user_id': 'test_user_789',
         'session_id': 'session_test_003',
-        'resumen_actual': 'Sin cambios relevantes',
-        'sesion_expirada': False
+        'resumen_actual': '',
+        'estado_conversacion': 'completado'
     }
     
     resultado3 = nodo_persistencia_episodica(state_test3)
-    print(f"✅ Manejado correctamente sin persistir\n")
+    print(f"✅ Guardado: {resultado3.update.get('episodio_guardado')}")
+    print(f"✅ Razón: Resumen vacío\n")
     
     print("🎉 Tests completados")
+

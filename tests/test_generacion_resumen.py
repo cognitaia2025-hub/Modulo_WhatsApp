@@ -7,17 +7,19 @@ Tests para Nodo N6: Generación de Resumen
 """
 
 import pytest
+import sys
+from pathlib import Path
 from unittest.mock import patch, Mock
 from langgraph.types import Command
 
-from src.nodes.generacion_resumen_node import (
-    nodo_generacion_resumen,
-    ESTADOS_SIN_RESUMEN
-)
+# Import directly from module file to avoid __init__.py circular imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 @patch('src.nodes.generacion_resumen_node.llm_auditor')
 def test_retorna_command(mock_llm):
     """Nodo retorna Command."""
+    from src.nodes.generacion_resumen_node import nodo_generacion_resumen
+    
     mock_llm.invoke.return_value.content = "Test resumen"
     mock_store = Mock()
     
@@ -38,6 +40,8 @@ def test_retorna_command(mock_llm):
 
 def test_detecta_estado_sin_resumen():
     """Salta generación si estado no requiere resumen."""
+    from src.nodes.generacion_resumen_node import nodo_generacion_resumen
+    
     mock_store = Mock()
     
     estado = {
@@ -55,9 +59,15 @@ def test_detecta_estado_sin_resumen():
     assert resultado.goto == "persistencia_episodica"
     assert resultado.update['resumen_actual'] == "Conversación en progreso"
 
-@pytest.mark.parametrize("estado", ESTADOS_SIN_RESUMEN)
+@pytest.mark.parametrize("estado", [
+    'esperando_confirmacion',
+    'recolectando_datos',
+    'procesando_pago'
+])
 def test_detecta_todos_estados_sin_resumen(estado):
     """Detecta todos los estados que no requieren resumen."""
+    from src.nodes.generacion_resumen_node import nodo_generacion_resumen
+    
     mock_store = Mock()
     
     state = {

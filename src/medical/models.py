@@ -130,6 +130,11 @@ class CitasMedicas(Base):
     recordatorio_enviado = Column(Boolean, default=False)
     recordatorio_fecha_envio = Column(DateTime)
     recordatorio_intentos = Column(Integer, default=0)
+    # Columnas para recordatorios específicos 24h y 2h (Etapa 9)
+    recordatorio_24h_enviado = Column(Boolean, default=False)
+    recordatorio_24h_fecha = Column(DateTime)
+    recordatorio_2h_enviado = Column(Boolean, default=False)
+    recordatorio_2h_fecha = Column(DateTime)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
     

@@ -4,10 +4,14 @@ Pruebas de selección inteligente de herramientas con LLM (20 tests)
 """
 
 import pytest
+from langgraph.types import Command
 from src.nodes.seleccion_herramientas_node import (
     nodo_seleccion_herramientas,
-    obtener_herramientas_segun_clasificacion
+    obtener_herramientas_segun_clasificacion,
+    SeleccionHerramientas,
+    ESTADOS_FLUJO_ACTIVO
 )
+from unittest.mock import patch
 
 
 def test_llm_selecciona_agendar_cita(estado_con_doctor, mock_obtener_herramientas, mocker):
@@ -17,10 +21,15 @@ def test_llm_selecciona_agendar_cita(estado_con_doctor, mock_obtener_herramienta
     estado["messages"][0].content = "Quiero agendar una cita"
     
     mock_llm = mocker.patch('src.nodes.seleccion_herramientas_node.llm_selector')
-    mock_llm.invoke.return_value.content = "agendar_cita_medica_completa"
+    mock_llm.invoke.return_value = SeleccionHerramientas(
+        herramientas_ids=["agendar_cita_medica_completa"],
+        razonamiento="Usuario solicita agendar cita"
+    )
     
     resultado = nodo_seleccion_herramientas(estado)
-    assert "agendar_cita_medica_completa" in resultado["herramientas_seleccionadas"]
+    assert isinstance(resultado, Command)
+    assert resultado.goto == "ejecucion_herramientas"
+    assert "agendar_cita_medica_completa" in resultado.update['herramientas_seleccionadas']
 
 
 def test_paciente_externo_herramientas_limitadas(estado_con_paciente):
@@ -68,7 +77,9 @@ def test_sin_mensaje_retorna_vacio(estado_con_doctor, mock_obtener_herramientas)
     estado["messages"] = []
     
     resultado = nodo_seleccion_herramientas(estado)
-    assert resultado["herramientas_seleccionadas"] == []
+    assert isinstance(resultado, Command)
+    assert resultado.goto == "generacion_resumen"
+    assert resultado.update['herramientas_seleccionadas'] == []
 
 
 def test_llm_selecciona_multiples_herramientas(estado_con_doctor, mock_obtener_herramientas, mocker):
@@ -77,11 +88,15 @@ def test_llm_selecciona_multiples_herramientas(estado_con_doctor, mock_obtener_h
     estado["clasificacion_mensaje"] = "medica"
 
     mock_llm = mocker.patch('src.nodes.seleccion_herramientas_node.llm_selector')
-    # Usar IDs que existan en las herramientas disponibles mockeadas
-    mock_llm.invoke.return_value.content = "consultar_slots_disponibles,agendar_cita_medica_completa"
+    mock_llm.invoke.return_value = SeleccionHerramientas(
+        herramientas_ids=["consultar_slots_disponibles", "agendar_cita_medica_completa"],
+        razonamiento="Necesita consultar y agendar"
+    )
 
     resultado = nodo_seleccion_herramientas(estado)
-    assert len(resultado["herramientas_seleccionadas"]) >= 1
+    assert isinstance(resultado, Command)
+    assert resultado.goto == "ejecucion_herramientas"
+    assert len(resultado.update['herramientas_seleccionadas']) >= 1
 
 
 def test_clasificacion_medica_requiere_doctor():
@@ -101,7 +116,9 @@ def test_fallback_si_llm_falla(estado_con_doctor, mock_obtener_herramientas, moc
     
     resultado = nodo_seleccion_herramientas(estado)
     # Debe retornar fallback
-    assert isinstance(resultado["herramientas_seleccionadas"], list)
+    assert isinstance(resultado, Command)
+    assert resultado.goto == "ejecucion_herramientas"
+    assert isinstance(resultado.update['herramientas_seleccionadas'], list)
 
 
 def test_herramientas_medicas_para_solicitud_cita():
@@ -125,38 +142,8 @@ def test_crear_paciente_solo_doctor():
     assert not tiene_paciente
 
 
-def test_parseo_respuesta_llm_limpia_espacios(mocker):
-    """Test 3.13: Parseo de LLM limpia espacios y saltos de línea"""
-    from src.nodes.seleccion_herramientas_node import parsear_respuesta_llm
-    
-    herramientas = [{"id_tool": "test_tool", "description": "Test"}]
-    respuesta = "  test_tool \n"
-    
-    resultado = parsear_respuesta_llm(respuesta, herramientas)
-    assert resultado == ["test_tool"]
-
-
-def test_respuesta_none_retorna_vacio(mocker):
-    """Test 3.14: Respuesta 'NONE' del LLM → lista vacía"""
-    from src.nodes.seleccion_herramientas_node import parsear_respuesta_llm
-    
-    resultado = parsear_respuesta_llm("NONE", [])
-    assert resultado == []
-
-
-def test_respuesta_invalida_ignora_herramienta(mocker):
-    """Test 3.15: Herramienta inválida es ignorada"""
-    from src.nodes.seleccion_herramientas_node import parsear_respuesta_llm
-    
-    herramientas = [{"id_tool": "valida", "description": "Test"}]
-    respuesta = "valida,invalida,otra_invalida"
-    
-    resultado = parsear_respuesta_llm(respuesta, herramientas)
-    assert resultado == ["valida"]
-
-
 def test_contexto_episodico_incluido_en_prompt(estado_con_doctor, mock_obtener_herramientas, mocker):
-    """Test 3.16: Contexto episódico se incluye en prompt si existe"""
+    """Test 3.13: Contexto episódico se incluye en prompt si existe"""
     estado = estado_con_doctor.copy()
     estado["clasificacion_mensaje"] = "medica"
     estado["contexto_episodico"] = {
@@ -165,55 +152,38 @@ def test_contexto_episodico_incluido_en_prompt(estado_con_doctor, mock_obtener_h
     }
     
     mock_llm = mocker.patch('src.nodes.seleccion_herramientas_node.llm_selector')
-    mock_llm.invoke.return_value.content = "test_tool"
+    mock_llm.invoke.return_value = SeleccionHerramientas(
+        herramientas_ids=["consultar_slots_disponibles"],
+        razonamiento="Test"
+    )
     
-    nodo_seleccion_herramientas(estado)
+    resultado = nodo_seleccion_herramientas(estado)
     
     # Verificar que se llamó el LLM
     assert mock_llm.invoke.called
-
-
-def test_multiples_herramientas_separadas_por_coma(mocker):
-    """Test 3.17: Múltiples herramientas separadas por comas"""
-    from src.nodes.seleccion_herramientas_node import parsear_respuesta_llm
-    
-    herramientas = [
-        {"id_tool": "tool1", "description": "T1"},
-        {"id_tool": "tool2", "description": "T2"}
-    ]
-    respuesta = "tool1,tool2"
-    
-    resultado = parsear_respuesta_llm(respuesta, herramientas)
-    assert len(resultado) == 2
-
-
-def test_herramientas_case_insensitive(mocker):
-    """Test 3.18: Nombres de herramientas son case-insensitive"""
-    from src.nodes.seleccion_herramientas_node import parsear_respuesta_llm
-    
-    herramientas = [{"id_tool": "test_tool", "description": "Test"}]
-    respuesta = "TEST_TOOL"
-    
-    resultado = parsear_respuesta_llm(respuesta, herramientas)
-    assert resultado == ["test_tool"]
+    assert isinstance(resultado, Command)
 
 
 def test_estado_actualizado_con_seleccion(estado_con_doctor, mock_obtener_herramientas, mocker):
-    """Test 3.19: Estado se actualiza con herramientas seleccionadas"""
+    """Test 3.14: Estado se actualiza con herramientas seleccionadas"""
     estado = estado_con_doctor.copy()
     estado["clasificacion_mensaje"] = "medica"
     
     mock_llm = mocker.patch('src.nodes.seleccion_herramientas_node.llm_selector')
-    mock_llm.invoke.return_value.content = "consultar_slots_disponibles"
+    mock_llm.invoke.return_value = SeleccionHerramientas(
+        herramientas_ids=["consultar_slots_disponibles"],
+        razonamiento="Usuario necesita consultar"
+    )
     
     resultado = nodo_seleccion_herramientas(estado)
     
-    assert "herramientas_seleccionadas" in resultado
-    assert isinstance(resultado["herramientas_seleccionadas"], list)
+    assert isinstance(resultado, Command)
+    assert "herramientas_seleccionadas" in resultado.update
+    assert isinstance(resultado.update['herramientas_seleccionadas'], list)
 
 
 def test_clasificacion_determina_pool_herramientas():
-    """Test 3.20: Cada clasificación tiene su propio pool de herramientas"""
+    """Test 3.15: Cada clasificación tiene su propio pool de herramientas"""
     personal = obtener_herramientas_segun_clasificacion("personal", "doctor")
     medica = obtener_herramientas_segun_clasificacion("medica", "doctor")
     chat = obtener_herramientas_segun_clasificacion("chat", "doctor")
@@ -222,3 +192,140 @@ def test_clasificacion_determina_pool_herramientas():
     # Chat no tiene herramientas
     assert len(chat) == 0
     assert len(medica) > 0
+
+
+def test_herramienta_invalida_es_filtrada(estado_con_doctor, mock_obtener_herramientas, mocker):
+    """Test 3.16: Herramienta inválida es filtrada automáticamente"""
+    estado = estado_con_doctor.copy()
+    estado["clasificacion_mensaje"] = "medica"
+    
+    mock_llm = mocker.patch('src.nodes.seleccion_herramientas_node.llm_selector')
+    mock_llm.invoke.return_value = SeleccionHerramientas(
+        herramientas_ids=["consultar_slots_disponibles", "herramienta_invalida"],
+        razonamiento="Test con herramienta inválida"
+    )
+    
+    resultado = nodo_seleccion_herramientas(estado)
+    
+    assert isinstance(resultado, Command)
+    assert "consultar_slots_disponibles" in resultado.update['herramientas_seleccionadas']
+    assert "herramienta_invalida" not in resultado.update['herramientas_seleccionadas']
+
+
+def test_clasificacion_chat_salta_llm(estado_con_doctor, mock_obtener_herramientas, mocker):
+    """Test 3.17: Clasificación 'chat' no llama al LLM"""
+    estado = estado_con_doctor.copy()
+    estado["clasificacion_mensaje"] = "chat"
+    
+    mock_llm = mocker.patch('src.nodes.seleccion_herramientas_node.llm_selector')
+    
+    resultado = nodo_seleccion_herramientas(estado)
+    
+    assert isinstance(resultado, Command)
+    assert resultado.goto == "generacion_resumen"
+    assert resultado.update['herramientas_seleccionadas'] == []
+    assert not mock_llm.invoke.called
+
+
+def test_pydantic_model_estructura(estado_con_doctor, mock_obtener_herramientas, mocker):
+    """Test 3.18: Pydantic model tiene estructura correcta"""
+    estado = estado_con_doctor.copy()
+    estado["clasificacion_mensaje"] = "medica"
+    
+    mock_llm = mocker.patch('src.nodes.seleccion_herramientas_node.llm_selector')
+    seleccion_obj = SeleccionHerramientas(
+        herramientas_ids=["consultar_slots_disponibles"],
+        razonamiento="Test de estructura"
+    )
+    mock_llm.invoke.return_value = seleccion_obj
+    
+    resultado = nodo_seleccion_herramientas(estado)
+    
+    assert isinstance(resultado, Command)
+    assert hasattr(seleccion_obj, 'herramientas_ids')
+    assert hasattr(seleccion_obj, 'razonamiento')
+    assert isinstance(seleccion_obj.herramientas_ids, list)
+    assert isinstance(seleccion_obj.razonamiento, str)
+
+
+def test_timeout_reducido():
+    """Test 3.19: Timeout de LLMs reducido a 10s"""
+    from src.nodes.seleccion_herramientas_node import llm_primary_base, llm_fallback_base
+    
+    # Verificar que los timeouts sean 10s
+    assert llm_primary_base.timeout == 10.0
+    assert llm_fallback_base.timeout == 10.0
+
+
+def test_lista_vacia_cuando_no_necesita_herramientas(estado_con_doctor, mock_obtener_herramientas, mocker):
+    """Test 3.20: Lista vacía cuando LLM determina que no se necesitan herramientas"""
+    estado = estado_con_doctor.copy()
+    estado["clasificacion_mensaje"] = "medica"
+    
+    mock_llm = mocker.patch('src.nodes.seleccion_herramientas_node.llm_selector')
+    mock_llm.invoke.return_value = SeleccionHerramientas(
+        herramientas_ids=[],
+        razonamiento="No se necesitan herramientas"
+    )
+    
+    resultado = nodo_seleccion_herramientas(estado)
+    
+    assert isinstance(resultado, Command)
+    assert resultado.goto == "ejecucion_herramientas"
+    assert resultado.update['herramientas_seleccionadas'] == []
+
+
+# ============================================================================
+# NUEVOS TESTS: Estado Conversacional y Pydantic
+# ============================================================================
+
+
+def test_detecta_estado_activo():
+    """Test 3.21: Detecta flujo activo y salta selección."""
+    estado = {
+        'clasificacion_mensaje': 'personal',
+        'tipo_usuario': 'doctor',
+        'messages': [{'role': 'user', 'content': 'Test'}],
+        'estado_conversacion': 'ejecutando_herramienta'
+    }
+    
+    resultado = nodo_seleccion_herramientas(estado)
+    
+    assert isinstance(resultado, Command)
+    assert resultado.goto == "ejecucion_herramientas"
+    assert resultado.update['herramientas_seleccionadas'] == []
+
+
+@pytest.mark.parametrize("estado", ESTADOS_FLUJO_ACTIVO)
+def test_detecta_todos_estados_activos(estado):
+    """Test 3.22: Detecta todos los estados de flujo activo."""
+    state = {
+        'clasificacion_mensaje': 'personal',
+        'tipo_usuario': 'doctor',
+        'messages': [{'role': 'user', 'content': 'Test'}],
+        'estado_conversacion': estado
+    }
+    
+    resultado = nodo_seleccion_herramientas(state)
+    
+    assert isinstance(resultado, Command)
+    assert resultado.update['herramientas_seleccionadas'] == []
+
+
+@patch('src.nodes.seleccion_herramientas_node.llm_selector')
+def test_pydantic_model_funciona(mock_llm, estado_con_doctor, mock_obtener_herramientas):
+    """Test 3.23: Pydantic model parsea correctamente."""
+    mock_llm.invoke.return_value = SeleccionHerramientas(
+        herramientas_ids=["consultar_slots_disponibles"],
+        razonamiento="Usuario pregunta por eventos"
+    )
+    
+    estado = estado_con_doctor.copy()
+    estado['clasificacion_mensaje'] = 'medica'
+    estado['messages'][0].content = '¿Qué eventos tengo?'
+    estado['estado_conversacion'] = 'inicial'
+    
+    resultado = nodo_seleccion_herramientas(estado)
+    
+    assert isinstance(resultado, Command)
+    assert "consultar_slots_disponibles" in resultado.update['herramientas_seleccionadas']

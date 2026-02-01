@@ -6,7 +6,7 @@ Este nodo recupera conversaciones previas relevantes usando búsqueda semántica
 Responsabilidades:
 - Generar embedding del último mensaje del usuario (384 dims)
 - Buscar TOP 5 resúmenes similares en pgvector
-- Filtrar por relevancia (similarity > 0.7)
+- Filtrar por relevancia (similarity >= 0.5)
 - Formatear contexto legible para LLMs
 - Actualizar state['contexto_episodico']
 - Manejo robusto de errores (continuar sin contexto si falla)
@@ -15,9 +15,10 @@ Responsabilidades:
 import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime
-import psycopg2
-from psycopg2.extras import RealDictCursor
+import psycopg
+from psycopg.rows import dict_row
 
+from langgraph.types import Command
 from src.state.agent_state import WhatsAppAgentState
 from src.embeddings.local_embedder import get_embedder, generate_embedding
 from src.database.db_config import get_db_connection
@@ -31,9 +32,20 @@ from src.utils.logging_config import (
 logger = logging.getLogger(__name__)
 
 # Threshold de similitud (cosine similarity)
-# ✅ Bajado de 0.7 a 0.5 para permitir queries cortas como "Como me llamo?"
+# Threshold de similitud: 0.5 (50% similar o más)
 SIMILARITY_THRESHOLD = 0.5
 MAX_EPISODIOS = 5
+
+# ==================== CONSTANTES ====================
+
+# Estados conversacionales que requieren saltar recuperación
+ESTADOS_FLUJO_ACTIVO = [
+    'ejecutando_herramienta',
+    'esperando_confirmacion',
+    'procesando_resultado',
+    'recolectando_fecha',
+    'recolectando_hora'
+]
 
 
 def extraer_ultimo_mensaje_usuario(state: WhatsAppAgentState) -> str:
@@ -72,6 +84,11 @@ def buscar_episodios_similares(
     """
     Busca episodios similares en pgvector usando cosine similarity.
     
+    MEJORAS:
+    ✅ Filtro threshold en SQL (no post-query en Python)
+    ✅ Usa psycopg3 (alineado con N3B)
+    ✅ Más eficiente: BD filtra antes de retornar
+    
     Args:
         user_id: ID del usuario para filtrar resultados
         query_embedding: Vector de 384 dimensiones del mensaje actual
@@ -82,45 +99,39 @@ def buscar_episodios_similares(
         Lista de dicts con {resumen, metadata, timestamp, similarity}
     """
     try:
-        conn = get_db_connection()
-        if not conn:
-            logger.error("    ❌ No se pudo conectar a PostgreSQL")
-            return []
-        
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
-        
-        # Query optimizado con pgvector (cosine similarity)
-        # 1 - (embedding <=> %s) convierte distancia a similitud
-        query = """
-            SELECT 
-                resumen,
-                metadata,
-                timestamp,
-                1 - (embedding <=> %s::vector) as similarity
-            FROM memoria_episodica
-            WHERE user_id = %s
-            ORDER BY embedding <=> %s::vector
-            LIMIT %s
-        """
-        
-        # Convertir embedding a formato string para pgvector
-        embedding_str = f"[{','.join(map(str, query_embedding))}]"
-        
-        cursor.execute(query, (embedding_str, user_id, embedding_str, max_results))
-        resultados = cursor.fetchall()
-        
-        # Filtrar por threshold de similitud
-        episodios_filtrados = [
-            dict(row) for row in resultados
-            if row['similarity'] >= threshold
-        ]
-        
-        cursor.close()
-        conn.close()
-        
-        logger.info(f"    📊 Encontrados {len(resultados)} episodios, {len(episodios_filtrados)} sobre threshold")
-        
-        return episodios_filtrados
+        # ✅ NUEVO: psycopg3 con dict_row
+        with psycopg.connect(
+            "postgresql://postgres:postgres@localhost:5434/agente_whatsapp"
+        ) as conn:
+            with conn.cursor(row_factory=dict_row) as cursor:
+                
+                # ✅ MEJORADO: Filtro threshold en SQL (no post-query)
+                query = """
+                    SELECT 
+                        resumen,
+                        metadata,
+                        timestamp,
+                        1 - (embedding <=> %s::vector) as similarity
+                    FROM memoria_episodica
+                    WHERE user_id = %s
+                      AND 1 - (embedding <=> %s::vector) >= %s
+                    ORDER BY embedding <=> %s::vector
+                    LIMIT %s
+                """
+                
+                # Convertir embedding a formato string para pgvector
+                embedding_str = f"[{','.join(map(str, query_embedding))}]"
+                
+                cursor.execute(
+                    query, 
+                    (embedding_str, user_id, embedding_str, threshold, embedding_str, max_results)
+                )
+                
+                resultados = cursor.fetchall()
+                
+                logger.info(f"    📊 Encontrados {len(resultados)} episodios sobre threshold {threshold}")
+                
+                return resultados
         
     except Exception as e:
         logger.error(f"    ❌ Error en búsqueda pgvector: {e}")
@@ -130,6 +141,10 @@ def buscar_episodios_similares(
 def formatear_contexto_episodico(episodios: List[Dict[str, Any]]) -> str:
     """
     Formatea los episodios recuperados en texto legible para LLMs.
+    
+    MEJORAS:
+    ✅ Trunca resúmenes largos (>200 chars)
+    ✅ Formato más compacto
     
     Args:
         episodios: Lista de episodios con resumen, metadata, timestamp, similarity
@@ -154,9 +169,16 @@ def formatear_contexto_episodico(episodios: List[Dict[str, Any]]) -> str:
         else:
             fecha_str = str(timestamp)
         
+        # ✅ NUEVO: Truncar resúmenes muy largos
+        MAX_RESUMEN_CHARS = 200
+        if len(resumen) > MAX_RESUMEN_CHARS:
+            resumen_truncado = resumen[:MAX_RESUMEN_CHARS - 3] + "..."
+        else:
+            resumen_truncado = resumen
+        
         # Agregar episodio al contexto
         texto += f"{i}. [{fecha_str}] (Relevancia: {similarity:.2f})\n"
-        texto += f"   {resumen}\n"
+        texto += f"   {resumen_truncado}\n"
         
         # Agregar metadata relevante si existe
         if metadata:
@@ -169,15 +191,21 @@ def formatear_contexto_episodico(episodios: List[Dict[str, Any]]) -> str:
     return texto.strip()
 
 
-def nodo_recuperacion_episodica(state: WhatsAppAgentState) -> Dict[str, Any]:
+def nodo_recuperacion_episodica(state: WhatsAppAgentState) -> Command:
     """
-    Nodo 3: Recupera memoria episódica relevante usando búsqueda semántica.
+    Nodo 3A: Recupera memoria episódica relevante usando búsqueda semántica.
+    
+    MEJORAS APLICADAS:
+    ✅ Command pattern con routing directo
+    ✅ Detección de estado conversacional
+    ✅ psycopg3 (alineado con N3B)
+    ✅ Filtro threshold en SQL
     
     Flujo:
-    1. Extrae último mensaje del usuario
-    2. Genera embedding del mensaje (384 dims)
-    3. Busca TOP 5 episodios similares en pgvector
-    4. Filtra por similarity > 0.7
+    1. Verifica estado conversacional (saltar si activo)
+    2. Extrae último mensaje del usuario
+    3. Genera embedding del mensaje (384 dims)
+    4. Busca episodios similares en pgvector (threshold en SQL)
     5. Formatea contexto para LLMs
     6. Actualiza state['contexto_episodico']
     
@@ -185,29 +213,43 @@ def nodo_recuperacion_episodica(state: WhatsAppAgentState) -> Dict[str, Any]:
         state: WhatsAppAgentState con messages y user_id
         
     Returns:
-        Dict con 'contexto_episodico' actualizado
+        Command con update y goto
     """
-    log_separator(logger, "NODO_3_RECUPERACION_EPISODICA", "INICIO")
+    log_separator(logger, "NODO_3A_RECUPERACION_EPISODICA", "INICIO")
     
     user_id = state.get('user_id')
+    estado_conversacion = state.get('estado_conversacion', 'inicial')
     
     # Log de input
-    input_data = f"user_id: {user_id}\nmensajes: {len(state.get('messages', []))}"
-    log_node_io(logger, "INPUT", "NODO_3_RECUPERACION", input_data)
+    input_data = f"user_id: {user_id}\nestado: {estado_conversacion}\nmensajes: {len(state.get('messages', []))}"
+    log_node_io(logger, "INPUT", "NODO_3A_RECUPERACION", input_data)
     
     logger.info(f"    👤 User ID: {user_id}")
+    logger.info(f"    🔄 Estado: {estado_conversacion}")
+    
+    # ✅ NUEVA VALIDACIÓN: Si hay flujo activo, saltar recuperación
+    if estado_conversacion in ESTADOS_FLUJO_ACTIVO:
+        logger.info(f"   🔄 Flujo activo detectado (estado: {estado_conversacion}) - Saltando recuperación")
+        
+        return Command(
+            update={'contexto_episodico': None},
+            goto="seleccion_herramientas"
+        )
     
     # Validar que tenemos user_id
     if not user_id:
         logger.warning("    ⚠️  Sin user_id, no se puede recuperar memoria")
-        return {
-            'contexto_episodico': {
-                'episodios_recuperados': 0,
-                'texto_formateado': 'Sin identificación de usuario.',
-                'timestamp_recuperacion': get_current_time().to_iso8601_string(),
-                'error': 'missing_user_id'
-            }
-        }
+        return Command(
+            update={
+                'contexto_episodico': {
+                    'episodios_recuperados': 0,
+                    'texto_formateado': 'Sin identificación de usuario.',
+                    'timestamp_recuperacion': get_current_time().to_iso8601_string(),
+                    'error': 'missing_user_id'
+                }
+            },
+            goto="seleccion_herramientas"
+        )
     
     try:
         # Paso 1: Extraer último mensaje del usuario
@@ -215,13 +257,16 @@ def nodo_recuperacion_episodica(state: WhatsAppAgentState) -> Dict[str, Any]:
         
         if not mensaje_usuario.strip():
             logger.info("    ℹ️  Sin mensaje del usuario para analizar")
-            return {
-                'contexto_episodico': {
-                    'episodios_recuperados': 0,
-                    'texto_formateado': 'No hay mensaje para analizar.',
-                    'timestamp_recuperacion': get_current_time().to_iso8601_string()
-                }
-            }
+            return Command(
+                update={
+                    'contexto_episodico': {
+                        'episodios_recuperados': 0,
+                        'texto_formateado': 'No hay mensaje para analizar.',
+                        'timestamp_recuperacion': get_current_time().to_iso8601_string()
+                    }
+                },
+                goto="seleccion_herramientas"
+            )
         
         log_user_message(logger, mensaje_usuario)
         
@@ -231,7 +276,7 @@ def nodo_recuperacion_episodica(state: WhatsAppAgentState) -> Dict[str, Any]:
         logger.info(f"    ✅ Embedding generado (384 dims)")
         
         # Paso 3: Buscar episodios similares en pgvector
-        logger.info(f"    🔍 Buscando TOP {MAX_EPISODIOS} episodios similares...")
+        logger.info(f"    🔍 Buscando episodios similares (threshold >= {SIMILARITY_THRESHOLD})...")
         episodios = buscar_episodios_similares(
             user_id=user_id,
             query_embedding=query_embedding,
@@ -267,40 +312,40 @@ def nodo_recuperacion_episodica(state: WhatsAppAgentState) -> Dict[str, Any]:
             ]
         
         # Log de output
-        output_data = f"episodios_recuperados: {len(episodios)}\nsimilarity_threshold: {SIMILARITY_THRESHOLD}"
-        log_node_io(logger, "OUTPUT", "NODO_3_RECUPERACION", output_data)
-        log_separator(logger, "NODO_3_RECUPERACION_EPISODICA", "FIN")
+        output_data = f"episodios_recuperados: {len(episodios)}\nthreshold: {SIMILARITY_THRESHOLD}"
+        log_node_io(logger, "OUTPUT", "NODO_3A_RECUPERACION", output_data)
+        log_separator(logger, "NODO_3A_RECUPERACION_EPISODICA", "FIN")
         
-        return {'contexto_episodico': contexto}
+        # ✅ Retornar Command (no Dict)
+        return Command(
+            update={'contexto_episodico': contexto},
+            goto="seleccion_herramientas"
+        )
         
     except Exception as e:
         # Manejo robusto: no bloquear el flujo si falla la recuperación
         logger.error(f"    ❌ Error en recuperación episódica: {e}")
         logger.info("    ⚡ Continuando sin contexto histórico...")
         
-        log_separator(logger, "NODO_3_RECUPERACION_EPISODICA", "FIN")
+        log_separator(logger, "NODO_3A_RECUPERACION_EPISODICA", "FIN")
         
-        return {
-            'contexto_episodico': {
-                'episodios_recuperados': 0,
-                'texto_formateado': 'Error al recuperar memoria (continuando sin contexto).',
-                'timestamp_recuperacion': get_current_time().to_iso8601_string(),
-                'error': str(e)
-            }
-        }
+        return Command(
+            update={
+                'contexto_episodico': {
+                    'episodios_recuperados': 0,
+                    'texto_formateado': 'Error al recuperar memoria (continuando sin contexto).',
+                    'timestamp_recuperacion': get_current_time().to_iso8601_string(),
+                    'error': str(e)
+                }
+            },
+            goto="seleccion_herramientas"
+        )
 
 
 # Wrapper para compatibilidad con LangGraph
-def nodo_recuperacion_episodica_wrapper(state: WhatsAppAgentState) -> WhatsAppAgentState:
-    """
-    Wrapper que mantiene la firma esperada por el grafo.
-    """
-    resultado = nodo_recuperacion_episodica(state)
-    
-    # Actualizar estado
-    state['contexto_episodico'] = resultado['contexto_episodico']
-    
-    return state
+def nodo_recuperacion_episodica_wrapper(state: WhatsAppAgentState) -> Command:
+    """Wrapper para LangGraph - retorna Command directamente."""
+    return nodo_recuperacion_episodica(state)
 
 
 # ============================================================================

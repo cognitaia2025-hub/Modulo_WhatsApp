@@ -59,7 +59,9 @@ def generar_embedding(texto: str) -> List[float]:
         return embedding.tolist()
     
     except Exception as e:
-        logger.error(f"❌ Error generando embedding: {e}")
+        # Log truncated text for debugging
+        texto_truncado = texto[:100] + "..." if len(texto) > 100 else texto
+        logger.error(f"❌ Error generando embedding para texto: '{texto_truncado}'. Error: {e}")
         return None
 
 
@@ -103,7 +105,7 @@ def obtener_pacientes_recientes(doctor_id: int, limit: int = 10) -> List[Dict]:
                 cur.execute("""
                     SELECT DISTINCT ON (p.id)
                         p.id,
-                        p.nombre,
+                        p.nombre_completo,
                         p.telefono,
                         p.email,
                         MAX(cm.fecha_hora_inicio) as ultima_cita,
@@ -112,7 +114,7 @@ def obtener_pacientes_recientes(doctor_id: int, limit: int = 10) -> List[Dict]:
                     INNER JOIN citas_medicas cm ON p.id = cm.paciente_id
                     WHERE cm.doctor_id = %s
                         AND cm.estado IN ('confirmada', 'completada')
-                    GROUP BY p.id, p.nombre, p.telefono, p.email
+                    GROUP BY p.id, p.nombre_completo, p.telefono, p.email
                     ORDER BY ultima_cita DESC
                     LIMIT %s
                 """, (doctor_id, limit))
@@ -155,7 +157,7 @@ def obtener_citas_del_dia(doctor_id: int) -> List[Dict]:
                     SELECT 
                         cm.id,
                         cm.paciente_id,
-                        p.nombre as paciente_nombre,
+                        p.nombre_completo as paciente_nombre,
                         cm.fecha_hora_inicio,
                         cm.fecha_hora_fin,
                         cm.estado,

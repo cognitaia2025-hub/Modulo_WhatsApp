@@ -17,6 +17,8 @@ from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from dotenv import load_dotenv
 import os
+from pydantic import BaseModel, Field
+from langgraph.types import Command
 
 from src.state.agent_state import WhatsAppAgentState
 from src.database import get_herramientas_disponibles
@@ -30,6 +32,32 @@ from src.utils.logging_config import (
 
 load_dotenv()
 logger = logging.getLogger(__name__)
+
+
+# ==================== PYDANTIC MODEL ====================
+
+class SeleccionHerramientas(BaseModel):
+    """Respuesta estructurada del selector de herramientas."""
+    
+    herramientas_ids: List[str] = Field(
+        description="Lista de IDs de herramientas a usar (ej: ['list_calendar_events'])"
+    )
+    
+    razonamiento: str = Field(
+        description="Breve explicación de por qué se eligieron estas herramientas"
+    )
+
+
+# ==================== CONSTANTES ====================
+
+# Estados conversacionales que requieren saltar selección
+ESTADOS_FLUJO_ACTIVO = [
+    'ejecutando_herramienta',
+    'esperando_confirmacion',
+    'procesando_resultado',
+    'recolectando_fecha',
+    'recolectando_hora'
+]
 
 
 def obtener_herramientas_segun_clasificacion(
@@ -82,25 +110,37 @@ def obtener_herramientas_segun_clasificacion(
     return herramientas
 
 
-# LLM principal para selección (DeepSeek)
-llm_primary = ChatOpenAI(
+# LLM primario: DeepSeek con structured output
+llm_primary_base = ChatOpenAI(
     model="deepseek-chat",
     temperature=0,
-    max_tokens=100,
+    max_tokens=200,  # Aumentado para JSON estructurado
     api_key=os.getenv("DEEPSEEK_API_KEY"),
     base_url="https://api.deepseek.com/v1",
-    timeout=20.0,
-    max_retries=0  # ✅ Reintentos los maneja LangGraph
+    timeout=10.0,  # ✅ Reducido de 20s a 10s
+    max_retries=0
 )
 
-# Fallback: Claude Haiku 4.5
-llm_fallback = ChatAnthropic(
+llm_fallback_base = ChatAnthropic(
     model="claude-3-5-haiku-20241022",
     temperature=0,
-    max_tokens=100,
+    max_tokens=200,
     api_key=os.getenv("ANTHROPIC_API_KEY"),
-    timeout=15.0,
+    timeout=10.0,  # ✅ Reducido de 15s a 10s
     max_retries=0
+)
+
+# Configurar structured output
+llm_primary = llm_primary_base.with_structured_output(
+    SeleccionHerramientas,
+    method="json_schema",
+    strict=True
+)
+
+llm_fallback = llm_fallback_base.with_structured_output(
+    SeleccionHerramientas,
+    method="json_schema",
+    strict=True
 )
 
 # Selector con fallback automático
@@ -134,28 +174,26 @@ def construir_prompt_seleccion(
     contexto_episodico: Dict = None
 ) -> str:
     """
-    Construye el prompt para el LLM de selección de herramientas
+    Construye prompt optimizado para selección de herramientas.
     
-    Args:
-        mensaje_usuario: Último mensaje del usuario
-        herramientas: Lista de dicts con id_tool y description
-        contexto_episodico: Contexto histórico (opcional)
-        
-    Returns:
-        Prompt estructurado para el LLM
+    MEJORAS:
+    ✅ Prompt más corto y directo
+    ✅ Enfocado en IDs exactos
+    ✅ Sin números ni índices
     """
-    # Formatear herramientas disponibles SIN NUMERACIÓN (usar viñetas)
+    # Formatear herramientas
     herramientas_str = "\n".join([
-        f"• {h['id_tool']} — {h['description']}"
+        f"• {h['id_tool']}: {h['description']}"
         for h in herramientas
     ])
     
-    # Agregar contexto episódico si existe
+    # Contexto episódico si existe
     contexto_str = ""
     if contexto_episodico and contexto_episodico.get('episodios_recuperados'):
-        contexto_str = f"\n\nContexto histórico relevante:\n{contexto_episodico.get('texto_formateado', '')}\n"
+        episodios = contexto_episodico.get('texto_formateado', '')[:300]  # Truncar
+        contexto_str = f"\n\nContexto relevante:\n{episodios}\n"
     
-    prompt = f"""Eres un selector de herramientas de calendario. Tu trabajo es ÚNICAMENTE responder con el ID exacto de la herramienta.
+    prompt = f"""Selecciona las herramientas necesarias para esta solicitud.
 
 HERRAMIENTAS DISPONIBLES:
 {herramientas_str}
@@ -163,102 +201,58 @@ HERRAMIENTAS DISPONIBLES:
 MENSAJE DEL USUARIO:
 "{mensaje_usuario}"{contexto_str}
 
-REGLAS ESTRICTAS:
-1. NO utilices números, índices ni explicaciones
-2. Responde ÚNICAMENTE con el ID exacto de la herramienta (ej: list_calendar_events)
-3. Si necesitas múltiples herramientas, sepáralas con comas sin espacios
-4. Si NO estás seguro o NO se necesita ninguna herramienta, responde: NONE
-5. Tu respuesta debe contener SOLO el ID de la herramienta, nada más
+REGLAS:
+1. Retorna SOLO los IDs exactos de las herramientas (ej: "list_calendar_events")
+2. Si necesitas varias herramientas, inclúyelas en la lista
+3. Si NO necesitas ninguna herramienta, retorna lista vacía
+4. Usa el ID exacto como aparece arriba (sensible a mayúsculas)
 
-GUÍA RÁPIDA:
-- ¿Pregunta por agenda/eventos? → list_calendar_events
-- ¿Crear/agendar evento? → create_calendar_event
-- ¿Modificar hora/detalles? → update_calendar_event
-- ¿Eliminar evento? → delete_calendar_event
-- ¿Buscar eventos? → search_calendar_events
-- ¿Sin acción de calendario? → NONE
+EJEMPLOS:
+- "¿Qué eventos tengo?" → ["list_calendar_events"]
+- "Agendar cita mañana" → ["create_calendar_event"]
+- "Hola" → []
 
-RESPUESTA (solo ID o NONE):"""
+Retorna JSON con herramientas_ids y razonamiento."""
     
     return prompt
 
 
-def parsear_respuesta_llm(respuesta: str, herramientas_disponibles: List[Dict[str, str]]) -> List[str]:
-    """
-    Parsea la respuesta del LLM a lista de IDs con robustez contra errores comunes
-    
-    Args:
-        respuesta: String del LLM (ej: "list_calendar_events" o "1")
-        herramientas_disponibles: Lista de herramientas con id_tool para mapeo
-        
-    Returns:
-        Lista de IDs limpia (ej: ['list_calendar_events'])
-    """
-    # Limpieza profunda: quitar espacios, saltos de línea, comillas
-    respuesta = respuesta.strip().replace('\n', '').replace('"', '').replace("'", '')
-    
-    logger.info(f"    [DEBUG] Respuesta limpia: '{respuesta}'")
-    
-    # Caso: No necesita herramientas
-    if respuesta.upper() == "NONE" or respuesta == "":
-        logger.info("    [DEBUG] Sin herramientas (NONE)")
-        return []
-    
-    # MAPEO DE SEGURIDAD: Si el LLM responde con número, mapearlo al ID
-    if respuesta.isdigit():
-        indice = int(respuesta) - 1  # "1" → índice 0
-        if 0 <= indice < len(herramientas_disponibles):
-            id_mapeado = herramientas_disponibles[indice]['id_tool']
-            logger.warning(f"    ⚠️  LLM respondió con número '{respuesta}', mapeando a '{id_mapeado}'")
-            return [id_mapeado]
-        else:
-            logger.error(f"    ❌ Índice '{respuesta}' fuera de rango (max: {len(herramientas_disponibles)})")
-            return []
-    
-    # Limpiar y separar por comas
-    ids = [
-        id_tool.strip().lower()
-        for id_tool in respuesta.split(',')
-        if id_tool.strip()
-    ]
-    
-    # Validar contra IDs reales en la base de datos
-    ids_validos_db = [h['id_tool'] for h in herramientas_disponibles]
-    logger.info(f"    [DEBUG] IDs Válidos en DB: {ids_validos_db}")
-    
-    ids_finales = []
-    for id_tool in ids:
-        if id_tool in ids_validos_db:
-            ids_finales.append(id_tool)
-        else:
-            logger.warning(f"    ⚠️  ID '{id_tool}' no existe en DB, ignorando")
-    
-    return ids_finales
-
-
-def nodo_seleccion_herramientas(state: WhatsAppAgentState) -> Dict:
+def nodo_seleccion_herramientas(state: WhatsAppAgentState) -> Command:
     """
     Nodo 4: Selecciona herramientas basándose en la conversación y clasificación
     
+    MEJORAS APLICADAS:
+    ✅ Command pattern con routing directo
+    ✅ Pydantic structured output
+    ✅ Detección de estado conversacional
+    ✅ Timeout reducido (10s)
+    
     Flujo:
-    1. Obtiene clasificación del mensaje (de filtrado_inteligente)
-    2. Obtiene herramientas según clasificación y tipo de usuario
-    3. Extrae último mensaje del usuario
+    1. Verifica estado conversacional (saltar si activo)
+    2. Obtiene clasificación y tipo de usuario
+    3. Obtiene herramientas según clasificación
     4. Consulta LLM para selección inteligente
-    5. Parsea respuesta a lista de IDs
+    5. Valida herramientas seleccionadas
     6. Actualiza state['herramientas_seleccionadas']
     
-    Args:
-        state: WhatsAppAgentState con mensajes y contexto
-        
     Returns:
-        Dict con 'herramientas_seleccionadas': List[str]
+        Command con update y goto
     """
     log_separator(logger, "NODO_4_SELECCION_HERRAMIENTAS", "INICIO")
     
-    # Log del input del nodo
-    state_input = f"messages: {len(state.get('messages', []))} mensajes\ncontexto_episodico: {bool(state.get('contexto_episodico'))}"
+    # Log del input
+    state_input = f"messages: {len(state.get('messages', []))} mensajes\ncontexto: {bool(state.get('contexto_episodico'))}"
     log_node_io(logger, "INPUT", "NODO_4_SELECCION", state_input)
+    
+    # ✅ NUEVA VALIDACIÓN: Detectar estado conversacional
+    estado_conversacion = state.get('estado_conversacion', 'inicial')
+    
+    if estado_conversacion in ESTADOS_FLUJO_ACTIVO:
+        logger.info(f"   🔄 Flujo activo detectado (estado: {estado_conversacion}) - Saltando selección")
+        return Command(
+            update={'herramientas_seleccionadas': []},
+            goto="ejecucion_herramientas"
+        )
     
     try:
         # 1. Obtener clasificación y tipo de usuario
@@ -274,62 +268,82 @@ def nodo_seleccion_herramientas(state: WhatsAppAgentState) -> Dict:
             tipo_usuario=tipo_usuario
         )
         
-        # Si es chat, no hay herramientas
+        # Si es chat o sin herramientas
         if clasificacion == "chat" or not herramientas:
-            logger.info("    ℹ️  Sin herramientas necesarias (chat o sin acceso)")
-            return {'herramientas_seleccionadas': []}
+            logger.info("    ℹ️  Sin herramientas necesarias")
+            return Command(
+                update={'herramientas_seleccionadas': []},
+                goto="generacion_resumen"
+            )
         
         logger.info(f"    📦 Herramientas disponibles: {len(herramientas)}")
         
-        # 3. Extraer último mensaje del usuario
+        # 3. Extraer último mensaje
         mensaje_usuario = extraer_ultimo_mensaje_usuario(state)
         
         if not mensaje_usuario:
-            logger.warning("    ⚠️  No se encontró mensaje del usuario")
-            return {'herramientas_seleccionadas': []}
+            logger.warning("    ⚠️  Sin mensaje del usuario")
+            return Command(
+                update={'herramientas_seleccionadas': []},
+                goto="generacion_resumen"
+            )
         
         log_user_message(logger, mensaje_usuario)
         
-        # 4. Obtener contexto episódico si existe
+        # 4. Obtener contexto episódico
         contexto = state.get('contexto_episodico')
         tiene_contexto = contexto and contexto.get('episodios_recuperados')
+        logger.info(f"    📖 Contexto disponible: {tiene_contexto}")
         
-        logger.info(f"    📖 Contexto episódico disponible: {tiene_contexto}")
-        
-        # 5. Construir prompt para LLM
+        # 5. Construir prompt
         prompt = construir_prompt_seleccion(
             mensaje_usuario=mensaje_usuario,
             herramientas=herramientas,
             contexto_episodico=contexto
         )
         
-        # 6. Consultar LLM para selección inteligente
+        # 6. Consultar LLM (retorna Pydantic model)
         logger.info("    🤖 Consultando LLM para selección...")
         
-        respuesta = llm_selector.invoke(prompt)
-        respuesta_texto = respuesta.content.strip()
+        seleccion = llm_selector.invoke(prompt)  # ✅ Retorna SeleccionHerramientas
         
-        # Log detallado de interacción con LLM
-        log_llm_interaction(logger, "DeepSeek/Claude", prompt, respuesta_texto, truncate_prompt=800, truncate_response=200)
+        # Log de interacción
+        log_llm_interaction(
+            logger, 
+            "DeepSeek/Claude", 
+            prompt, 
+            f"IDs: {seleccion.herramientas_ids}, Razonamiento: {seleccion.razonamiento}",
+            truncate_prompt=800,
+            truncate_response=200
+        )
         
-        # 7. Parsear respuesta a lista de IDs con mapeo robusto
-        ids_seleccionados = parsear_respuesta_llm(respuesta_texto, herramientas)
+        # 7. Validar herramientas seleccionadas contra disponibles
+        ids_validos = [h['id_tool'] for h in herramientas]
+        ids_seleccionados = []
+        
+        for tool_id in seleccion.herramientas_ids:
+            if tool_id in ids_validos:
+                ids_seleccionados.append(tool_id)
+            else:
+                logger.warning(f"    ⚠️  Herramienta '{tool_id}' no disponible, ignorando")
         
         logger.info(f"    ✅ Herramientas seleccionadas: {ids_seleccionados}")
         
-        # Log del output del nodo
-        output_data = f"herramientas_seleccionadas: {ids_seleccionados}"
+        # Log del output
+        output_data = f"herramientas: {ids_seleccionados}"
         log_node_io(logger, "OUTPUT", "NODO_4_SELECCION", output_data)
         log_separator(logger, "NODO_4_SELECCION_HERRAMIENTAS", "FIN")
         
-        return {
-            'herramientas_seleccionadas': ids_seleccionados
-        }
+        # ✅ Retornar Command
+        return Command(
+            update={'herramientas_seleccionadas': ids_seleccionados},
+            goto="ejecucion_herramientas"
+        )
         
     except Exception as e:
-        # Fallback: según clasificación
-        logger.error(f"    ❌ Error en selección de herramientas: {e}")
-        logger.info("    🔄 Usando herramientas por defecto (fallback)")
+        # Fallback según clasificación
+        logger.error(f"    ❌ Error en selección: {e}")
+        logger.info("    🔄 Usando herramientas por defecto")
         
         clasificacion = state.get('clasificacion_mensaje', 'personal')
         fallback_tools = []
@@ -341,19 +355,13 @@ def nodo_seleccion_herramientas(state: WhatsAppAgentState) -> Dict:
         
         log_separator(logger, "NODO_4_SELECCION_HERRAMIENTAS", "FIN")
         
-        return {
-            'herramientas_seleccionadas': fallback_tools
-        }
+        return Command(
+            update={'herramientas_seleccionadas': fallback_tools},
+            goto="ejecucion_herramientas"
+        )
 
 
 # Wrapper para compatibilidad con grafo
-def nodo_seleccion_herramientas_wrapper(state: WhatsAppAgentState) -> WhatsAppAgentState:
-    """
-    Wrapper que mantiene la firma esperada por el grafo
-    """
-    resultado = nodo_seleccion_herramientas(state)
-    
-    # Actualizar estado
-    state['herramientas_seleccionadas'] = resultado['herramientas_seleccionadas']
-    
-    return state
+def nodo_seleccion_herramientas_wrapper(state: WhatsAppAgentState) -> Command:
+    """Wrapper para LangGraph - retorna Command directamente."""
+    return nodo_seleccion_herramientas(state)

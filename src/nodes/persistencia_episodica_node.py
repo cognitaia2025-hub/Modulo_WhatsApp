@@ -40,10 +40,14 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # Configuración de base de datos
+# Nota: Puerto 5434 se usa para evitar conflictos con PostgreSQL del sistema (puerto 5432)
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5434/agente_whatsapp")
 
 
 # ==================== CONSTANTES ====================
+
+# Configuración mínima de resumen
+MIN_RESUMEN_LENGTH = 10  # Caracteres mínimos para considerar un resumen válido
 
 # Estados conversacionales que requieren saltar persistencia
 ESTADOS_SIN_PERSISTENCIA = [
@@ -186,8 +190,8 @@ def nodo_persistencia_episodica(state: Dict[str, Any]) -> Command:
         )
     
     # Validar resumen
-    if not resumen_actual or len(resumen_actual.strip()) < 10:
-        logger.info("    ⚠️ Resumen vacío o muy corto, saltando persistencia")
+    if not resumen_actual or len(resumen_actual.strip()) < MIN_RESUMEN_LENGTH:
+        logger.info(f"    ⚠️ Resumen vacío o muy corto (< {MIN_RESUMEN_LENGTH} caracteres), saltando persistencia")
         
         output_data = "episodio_guardado: False (resumen vacío)"
         log_node_io(logger, "OUTPUT", "NODO_7_PERSISTENCIA", output_data)

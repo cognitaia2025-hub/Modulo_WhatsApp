@@ -1,5 +1,5 @@
 """
-Nodo 5: Ejecución de Herramientas y Orquestador
+Nodo 5A: Ejecución de Herramientas y Orquestador
 
 Este nodo es el corazón de la acción del agente:
 1. Ejecuta herramientas de Google Calendar
@@ -7,8 +7,14 @@ Este nodo es el corazón de la acción del agente:
 3. Integra contexto de tiempo de Mexicali
 4. Maneja errores de forma amigable
 
+MEJORAS APLICADAS (Modernización):
+✅ Command pattern con routing directo
+✅ Pydantic structured output para extracción
+✅ Detección de estado conversacional
+✅ Timeout reducido de 25s/20s a 10s
+
 Flujo:
-Usuario → Nodos 1-4 → [NODO 5] → Respuesta WhatsApp
+Usuario → Nodos 1-4 → [NODO 5A] → Respuesta WhatsApp
 """
 
 import logging

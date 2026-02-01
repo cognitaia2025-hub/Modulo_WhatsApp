@@ -15,8 +15,10 @@ Responsabilidades:
 import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+import os
 import psycopg
 from psycopg.rows import dict_row
+from dotenv import load_dotenv
 
 from langgraph.types import Command
 from src.state.agent_state import WhatsAppAgentState
@@ -29,7 +31,11 @@ from src.utils.logging_config import (
     log_user_message
 )
 
+load_dotenv()
 logger = logging.getLogger(__name__)
+
+# Configuración de base de datos
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5434/agente_whatsapp")
 
 # Threshold de similitud (cosine similarity)
 # Threshold de similitud: 0.5 (50% similar o más)
@@ -100,9 +106,7 @@ def buscar_episodios_similares(
     """
     try:
         # ✅ NUEVO: psycopg3 con dict_row
-        with psycopg.connect(
-            "postgresql://postgres:postgres@localhost:5434/agente_whatsapp"
-        ) as conn:
+        with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor(row_factory=dict_row) as cursor:
                 
                 # ✅ MEJORADO: Filtro threshold en SQL (no post-query)

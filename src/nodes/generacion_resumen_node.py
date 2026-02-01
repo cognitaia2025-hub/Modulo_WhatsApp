@@ -23,6 +23,11 @@ from dotenv import load_dotenv
 # ✅ Imports para memoria semántica
 from langgraph.store.base import BaseStore
 from src.memory import update_semantic_memory
+from langgraph.types import Command
+from src.utils.logging_config import (
+    log_separator,
+    log_node_io
+)
 
 load_dotenv()
 
@@ -31,26 +36,35 @@ logger = logging.getLogger(__name__)
 # LLM principal para auditoría
 llm_primary = ChatOpenAI(
     model="deepseek-chat",
-    temperature=0.2,  # Más preciso para resúmenes concisos
-    max_tokens=120,   # Límite estricto: ~80-100 palabras
+    temperature=0.2,
+    max_tokens=120,
     api_key=os.getenv("DEEPSEEK_API_KEY"),
     base_url="https://api.deepseek.com/v1",
-    timeout=15.0,  # Timeout reducido a 15 segundos
-    max_retries=0  # ✅ Reintentos los maneja LangGraph
+    timeout=10.0,  # ✅ Reducido de 15s a 10s
+    max_retries=0
 )
 
-# Fallback: Claude Haiku 4.5 (análisis rápido)
+# Fallback: Claude Haiku 4.5
 llm_fallback = ChatAnthropic(
     model="claude-3-5-haiku-20241022",
     temperature=0.2,
     max_tokens=120,
     api_key=os.getenv("ANTHROPIC_API_KEY"),
-    timeout=15.0,
+    timeout=10.0,  # ✅ Reducido de 15s a 10s
     max_retries=0
 )
 
 # Auditor con fallback automático
 llm_auditor = llm_primary.with_fallbacks([llm_fallback])
+
+# ==================== CONSTANTES ====================
+
+# Estados conversacionales que requieren saltar resumen
+ESTADOS_SIN_RESUMEN = [
+    'esperando_confirmacion',
+    'recolectando_datos',
+    'procesando_pago'
+]
 
 
 def extraer_mensajes_relevantes(messages: List[Any]) -> str:
@@ -144,51 +158,64 @@ RESUMEN:"""
     return prompt
 
 
-def nodo_generacion_resumen(state: Dict[str, Any], store: BaseStore) -> Dict[str, Any]:
+def nodo_generacion_resumen(state: Dict[str, Any], store: BaseStore) -> Command:
     """
     Nodo 6: Genera resumen ejecutivo de la sesión para memoria a largo plazo.
-
-    Este nodo es la "auditoría" que transforma conversación cruda en
-    conocimiento estructurado antes de persistir en pgvector.
-
-    También actualiza preferencias del usuario usando LLM structured output.
-
-    Args:
-        state: Estado del grafo con messages, contexto_episodico, sesion_expirada
-        store: BaseStore con memoria semántica (inyectado por LangGraph)
-
+    
+    MEJORAS APLICADAS:
+    ✅ Command pattern con routing directo
+    ✅ Detección de estado conversacional
+    ✅ Timeout reducido (10s)
+    ✅ Logging estructurado
+    
     Returns:
-        State actualizado con resumen_actual
+        Command con update y goto
     """
-    logger.info("📝 [6] NODO_GENERACION_RESUMEN - Auditando sesión")
-
+    log_separator(logger, "NODO_6_GENERACION_RESUMEN", "INICIO")
+    
     messages = state.get('messages', [])
     contexto_episodico = state.get('contexto_episodico')
     sesion_expirada = state.get('sesion_expirada', False)
     user_id = state.get('user_id', 'default_user')
+    estado_conversacion = state.get('estado_conversacion', 'inicial')
     
-    # Validar que hay suficientes mensajes para resumir
+    # Log del input
+    input_data = f"messages: {len(messages)}\nsesion_expirada: {sesion_expirada}\nestado: {estado_conversacion}"
+    log_node_io(logger, "INPUT", "NODO_6_RESUMEN", input_data)
+    
+    logger.info(f"    📋 Mensajes a resumir: {len(messages)}")
+    logger.info(f"    {'⏰' if sesion_expirada else '✅'} Modo: {'RECUPERACIÓN' if sesion_expirada else 'NORMAL'}")
+    logger.info(f"    🔄 Estado: {estado_conversacion}")
+    
+    # ✅ NUEVA VALIDACIÓN: Detectar estado conversacional
+    if estado_conversacion in ESTADOS_SIN_RESUMEN:
+        logger.info(f"   🔄 Estado {estado_conversacion} - Saltando generación de resumen")
+        return Command(
+            update={'resumen_actual': "Conversación en progreso"},
+            goto="persistencia_episodica"
+        )
+    
+    # Validar mensajes suficientes
     if len(messages) < 2:
         logger.info("    ⚠️  Pocos mensajes para generar resumen")
-        return {
-            **state,
-            'resumen_actual': "Sin cambios relevantes"
-        }
+        return Command(
+            update={'resumen_actual': "Sin cambios relevantes"},
+            goto="persistencia_episodica"
+        )
     
-    # Extraer conversación relevante
+    # Extraer conversación
     conversacion = extraer_mensajes_relevantes(messages)
     
     if not conversacion or len(conversacion.strip()) < 10:
-        logger.info("    ⚠️  No hay contenido relevante para resumir")
-        return {
-            **state,
-            'resumen_actual': "Sin cambios relevantes"
-        }
+        logger.info("    ⚠️  No hay contenido relevante")
+        return Command(
+            update={'resumen_actual': "Sin cambios relevantes"},
+            goto="persistencia_episodica"
+        )
     
-    logger.info(f"    📋 Conversación a auditar: {len(conversacion)} caracteres")
-    logger.info(f"    {'⏰' if sesion_expirada else '✅'} Modo: {'RECUPERACIÓN (sesión expirada)' if sesion_expirada else 'NORMAL'}")
+    logger.info(f"    📊 Caracteres a auditar: {len(conversacion)}")
     
-    # Construir prompt de auditoría
+    # Construir prompt
     prompt = construir_prompt_auditoria(
         conversacion=conversacion,
         contexto_episodico=contexto_episodico,
@@ -196,56 +223,59 @@ def nodo_generacion_resumen(state: Dict[str, Any], store: BaseStore) -> Dict[str
     )
     
     try:
-        # Invocar LLM auditor
+        # Invocar LLM
         logger.info("    🤖 Invocando auditor LLM...")
         respuesta = llm_auditor.invoke(prompt)
         resumen = respuesta.content.strip()
         
-        # Añadir timestamp al resumen
+        # Timestamp
         timestamp = get_current_time().format('DD/MM/YYYY HH:mm', locale='es')
         resumen_con_fecha = f"[{timestamp}] {resumen}"
         
-        logger.info(f"    ✅ Resumen generado: '{resumen[:80]}...'")
+        logger.info(f"    ✅ Resumen: '{resumen[:80]}...'")
         logger.info(f"    📊 Longitud: {len(resumen)} caracteres")
-
-        # ✅ Actualizar preferencias del usuario automáticamente
+        
+        # Actualizar preferencias
         try:
-            logger.info("    🧠 Actualizando preferencias del usuario...")
+            logger.info("    🧠 Actualizando preferencias...")
             update_semantic_memory(
                 state=state,
                 store=store,
                 user_id=user_id,
-                llm=llm_auditor  # Reutilizar el mismo LLM auditor
+                llm=llm_auditor
             )
             logger.info("    ✅ Preferencias procesadas")
         except Exception as pref_error:
-            logger.error(f"    ❌ Error actualizando preferencias: {pref_error}")
-            import traceback
-            logger.error(traceback.format_exc())
-
-        return {
-            **state,
-            'resumen_actual': resumen_con_fecha
-        }
+            logger.error(f"    ❌ Error preferencias: {pref_error}")
+        
+        # Log de output
+        output_data = f"resumen_chars: {len(resumen)}"
+        log_node_io(logger, "OUTPUT", "NODO_6_RESUMEN", output_data)
+        log_separator(logger, "NODO_6_GENERACION_RESUMEN", "FIN")
+        
+        # ✅ Retornar Command
+        return Command(
+            update={'resumen_actual': resumen_con_fecha},
+            goto="persistencia_episodica"
+        )
         
     except Exception as e:
-        logger.error(f"    ❌ Error al generar resumen: {e}")
+        logger.error(f"    ❌ Error generando resumen: {e}")
         
-        # Fallback: Resumen básico sin LLM
+        # Fallback
         timestamp = get_current_time().format('DD/MM/YYYY HH:mm', locale='es')
-        resumen_fallback = f"[{timestamp}] Conversación con {len(messages)} mensajes. Estado: {'Sesión expirada' if sesion_expirada else 'Activa'}."
+        resumen_fallback = f"[{timestamp}] Conversación con {len(messages)} mensajes."
         
-        return {
-            **state,
-            'resumen_actual': resumen_fallback
-        }
+        log_separator(logger, "NODO_6_GENERACION_RESUMEN", "FIN")
+        
+        return Command(
+            update={'resumen_actual': resumen_fallback},
+            goto="persistencia_episodica"
+        )
 
 
-def nodo_generacion_resumen_wrapper(state: Dict[str, Any], store: BaseStore) -> Dict[str, Any]:
-    """
-    Wrapper para compatibilidad con LangGraph.
-    Recibe store de LangGraph (REQUERIDO) y lo pasa al nodo principal.
-    """
+def nodo_generacion_resumen_wrapper(state: Dict[str, Any], store: BaseStore) -> Command:
+    """Wrapper para LangGraph - retorna Command directamente."""
     return nodo_generacion_resumen(state, store)
 
 

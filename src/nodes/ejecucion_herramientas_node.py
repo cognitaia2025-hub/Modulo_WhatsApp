@@ -12,12 +12,14 @@ Usuario → Nodos 1-4 → [NODO 5] → Respuesta WhatsApp
 """
 
 import logging
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage
 from dotenv import load_dotenv
 import os
+from pydantic import BaseModel, Field
+from langgraph.types import Command
 
 from src.state.agent_state import WhatsAppAgentState
 from src.auth import get_calendar_service
@@ -47,6 +49,39 @@ from src.memory import get_user_preferences, get_user_facts
 load_dotenv()
 logger = logging.getLogger(__name__)
 
+
+# ==================== PYDANTIC MODELS ====================
+
+# Models para extracción de parámetros
+class CreateEventParams(BaseModel):
+    """Parámetros para crear evento."""
+    summary: str = Field(description="Título del evento")
+    start_datetime: str = Field(description="Fecha/hora inicio YYYY-MM-DDTHH:MM:SS")
+    end_datetime: str = Field(description="Fecha/hora fin YYYY-MM-DDTHH:MM:SS")
+    location: Optional[str] = Field(default=None, description="Ubicación")
+    description: Optional[str] = Field(default=None, description="Descripción")
+
+class DeleteEventParams(BaseModel):
+    """Parámetros para eliminar evento."""
+    event_id: str = Field(description="ID del evento a eliminar")
+    event_description: str = Field(description="Descripción del evento")
+
+class UpdateEventParams(BaseModel):
+    """Parámetros para actualizar evento."""
+    event_id: str = Field(description="ID del evento")
+    event_description: str = Field(description="Descripción del evento")
+    new_start_datetime: str = Field(description="Nueva fecha/hora inicio")
+    new_end_datetime: str = Field(description="Nueva fecha/hora fin")
+
+class SearchEventParams(BaseModel):
+    """Parámetros para buscar eventos."""
+    query: str = Field(description="Palabras clave a buscar")
+    start_datetime: str = Field(description="Inicio del rango de búsqueda")
+    end_datetime: str = Field(description="Fin del rango de búsqueda")
+    max_results: int = Field(default=10)
+
+# ==================== LLM CONFIGURATION ====================
+
 # LLM principal para Orquestador (DeepSeek)
 llm_primary = ChatOpenAI(
     model="deepseek-chat",
@@ -54,8 +89,8 @@ llm_primary = ChatOpenAI(
     max_tokens=300,
     api_key=os.getenv("DEEPSEEK_API_KEY"),
     base_url="https://api.deepseek.com/v1",
-    timeout=25.0,
-    max_retries=0  # ✅ Reintentos los maneja LangGraph
+    timeout=10.0,  # ✅ Reducido de 25s a 10s
+    max_retries=0
 )
 
 # Fallback: Claude Haiku 4.5
@@ -64,12 +99,26 @@ llm_fallback = ChatAnthropic(
     temperature=0.7,
     max_tokens=300,
     api_key=os.getenv("ANTHROPIC_API_KEY"),
-    timeout=20.0,
+    timeout=10.0,  # ✅ Reducido de 20s a 10s
     max_retries=0
 )
 
 # Orquestador con fallback automático
 llm_orquestador = llm_primary.with_fallbacks([llm_fallback])
+
+# LLM con structured output para extracción
+llm_extractor = llm_primary.with_fallbacks([llm_fallback])
+
+
+# ==================== CONSTANTES ====================
+
+# Estados conversacionales que requieren saltar ejecución
+ESTADOS_FLUJO_ACTIVO = [
+    'esperando_confirmacion',
+    'recolectando_fecha',
+    'recolectando_hora',
+    'recolectando_ubicacion'
+]
 
 # Mapeo de IDs a funciones de herramientas
 TOOL_MAPPING = {
@@ -125,21 +174,24 @@ def ejecutar_herramienta(tool_id: str, params: Dict[str, Any]) -> Dict[str, Any]
 
 def extraer_parametros_con_llm(tool_id: str, mensaje_usuario: str, tiempo_context: str) -> Dict[str, Any]:
     """
-    Usa el LLM para extraer parámetros del mensaje del usuario según la herramienta
+    Usa Pydantic structured output para extraer parámetros.
     
-    Args:
-        tool_id: ID de la herramienta (e.g., 'create_calendar_event')
-        mensaje_usuario: Mensaje completo del usuario
-        tiempo_context: "Hoy es jueves, 23 de enero de 2025, 10:45 AM..."
-        
-    Returns:
-        Dict con parámetros extraídos (pueden estar incompletos)
+    MEJORAS:
+    ✅ Pydantic valida automáticamente
+    ✅ Type-safe
+    ✅ Sin parsing JSON manual
     """
     logger.info(f"    🔍 Extrayendo parámetros para {tool_id}...")
     
-    # Plantillas de extracción según la herramienta
     if tool_id == 'create_calendar_event':
-        prompt = f"""Eres un asistente que extrae información de eventos de calendario.
+        # Configurar structured output
+        llm_with_structure = llm_extractor.with_structured_output(
+            CreateEventParams,
+            method="json_schema",
+            strict=True
+        )
+        
+        prompt = f"""Extrae información del evento de calendario.
 
 CONTEXTO DE TIEMPO:
 {tiempo_context}
@@ -147,127 +199,80 @@ CONTEXTO DE TIEMPO:
 MENSAJE DEL USUARIO:
 "{mensaje_usuario}"
 
-Extrae la siguiente información del mensaje. Si algún dato NO está explícito, devuelve null:
+Extrae:
 - summary: título del evento
-- start_datetime: fecha/hora de inicio en formato YYYY-MM-DDTHH:MM:SS (usa el contexto de tiempo para resolver "hoy", "mañana", etc.)
-- end_datetime: fecha/hora de fin en formato YYYY-MM-DDTHH:MM:SS (si no se especifica, asume 1 hora después del inicio)
-- location: ubicación del evento (si se menciona)
-- description: descripción adicional (si se menciona)
+- start_datetime: inicio en YYYY-MM-DDTHH:MM:SS
+- end_datetime: fin en YYYY-MM-DDTHH:MM:SS (1 hora después si no se especifica)
+- location: ubicación (null si no se menciona)
+- description: descripción (null si no se menciona)
 
-Responde SOLO con JSON válido:
-{{
-  "summary": "...",
-  "start_datetime": "YYYY-MM-DDTHH:MM:SS",
-  "end_datetime": "YYYY-MM-DDTHH:MM:SS",
-  "location": "..." o null,
-  "description": "..." o null
-}}
-
-JSON:"""
+Retorna JSON válido con estos campos."""
         
+        try:
+            params = llm_with_structure.invoke(prompt)
+            return params.model_dump()
+        except Exception as e:
+            logger.error(f"    ❌ Error extrayendo parámetros: {e}")
+            return {}
+    
     elif tool_id == 'list_calendar_events':
-        # Listar eventos normalmente usa fecha de hoy, no necesita extracción compleja
         now = pendulum.now('America/Tijuana')
-        start_of_day = now.start_of('day')
-        end_of_day = now.end_of('day')
-        
         return {
-            'start_datetime': start_of_day.format('YYYY-MM-DDTHH:mm:ss'),
-            'end_datetime': end_of_day.format('YYYY-MM-DDTHH:mm:ss'),
+            'start_datetime': now.start_of('day').format('YYYY-MM-DDTHH:mm:ss'),
+            'end_datetime': now.end_of('day').format('YYYY-MM-DDTHH:mm:ss'),
             'max_results': 10,
             'timezone': 'America/Tijuana'
         }
     
     elif tool_id == 'delete_calendar_event':
-        prompt = f"""Extrae el ID del evento o descripción que el usuario quiere eliminar.
+        llm_with_structure = llm_extractor.with_structured_output(DeleteEventParams)
+        
+        prompt = f"""Extrae el ID del evento a eliminar.
 
-MENSAJE DEL USUARIO:
-"{mensaje_usuario}"
+MENSAJE: "{mensaje_usuario}"
 
-Responde SOLO con JSON:
-{{
-  "event_id": "..." o null,
-  "event_description": "descripción aproximada si no hay ID"
-}}
-
-JSON:"""
+Retorna event_id y event_description."""
+        
+        try:
+            params = llm_with_structure.invoke(prompt)
+            return params.model_dump()
+        except:
+            return {}
     
     elif tool_id in ['postpone_calendar_event', 'update_calendar_event']:
-        prompt = f"""Extrae información sobre el evento a modificar/posponer y la nueva fecha/hora.
+        llm_with_structure = llm_extractor.with_structured_output(UpdateEventParams)
+        
+        prompt = f"""Extrae información para modificar evento.
 
-CONTEXTO DE TIEMPO:
-{tiempo_context}
+CONTEXTO: {tiempo_context}
+MENSAJE: "{mensaje_usuario}"
 
-MENSAJE DEL USUARIO:
-"{mensaje_usuario}"
-
-Instrucciones:
-1. Identifica qu\u00e9 evento quiere modificar el usuario (por nombre, descripci\u00f3n o ID)
-2. Extrae la nueva fecha y hora que el usuario quiere
-3. Si no menciona hora espec\u00edfica pero dice "tarde", usa 18:00
-4. Si dice "ma\u00f1ana", usa 10:00
-5. Si dice "noche", usa 20:00
-6. Calcula end_datetime como 1 hora despu\u00e9s del start_datetime
-
-Responde SOLO con JSON:
-{{
-  "event_id": "..." o null,
-  "event_description": "descripci\u00f3n del evento (ej: 'gimnasio')",
-  "new_start_datetime": "YYYY-MM-DDTHH:MM:SS",
-  "new_end_datetime": "YYYY-MM-DDTHH:MM:SS"
-}}
-
-JSON:"""
-
-    elif tool_id == 'search_calendar_events':
-        prompt = f"""Extrae palabras clave de búsqueda y rango de fechas del mensaje del usuario.
-
-CONTEXTO DE TIEMPO:
-{tiempo_context}
-
-MENSAJE DEL USUARIO:
-"{mensaje_usuario}"
-
-Instrucciones:
-1. Identifica las palabras clave que el usuario quiere buscar (nombre de paciente, tipo de cita, etc.)
-2. Si menciona un rango de fechas, extráelo. Si no, usa los próximos 30 días.
-3. Si dice "hoy", "esta semana", "este mes", calcula las fechas correctas.
-
-Responde SOLO con JSON:
-{{
-  "query": "palabras clave a buscar",
-  "start_datetime": "YYYY-MM-DDTHH:MM:SS",
-  "end_datetime": "YYYY-MM-DDTHH:MM:SS",
-  "max_results": 10
-}}
-
-JSON:"""
-
-    else:
-        logger.warning(f"    ⚠️  No hay plantilla de extracción para {tool_id}")
-        return {}
+Retorna event_id, event_description, new_start_datetime, new_end_datetime."""
+        
+        try:
+            params = llm_with_structure.invoke(prompt)
+            return params.model_dump()
+        except:
+            return {}
     
-    # Invocar LLM
-    try:
-        respuesta = llm_primary.invoke(prompt)
-        json_str = respuesta.content.strip()
+    elif tool_id == 'search_calendar_events':
+        llm_with_structure = llm_extractor.with_structured_output(SearchEventParams)
         
-        # Limpiar markdown si el LLM envuelve en ```json
-        if json_str.startswith('```'):
-            json_str = json_str.split('```')[1]
-            if json_str.startswith('json'):
-                json_str = json_str[4:]
+        prompt = f"""Extrae parámetros de búsqueda.
+
+CONTEXTO: {tiempo_context}
+MENSAJE: "{mensaje_usuario}"
+
+Retorna query, start_datetime, end_datetime, max_results."""
         
-        parametros = json.loads(json_str)
-        logger.info(f"    ✅ Parámetros extraídos: {parametros}")
-        return parametros
-        
-    except json.JSONDecodeError as e:
-        logger.error(f"    ❌ Error parseando JSON de LLM: {e}")
-        logger.error(f"    Respuesta del LLM: {respuesta.content}")
-        return {}
-    except Exception as e:
-        logger.error(f"    ❌ Error en extracción LLM: {e}")
+        try:
+            params = llm_with_structure.invoke(prompt)
+            return params.model_dump()
+        except:
+            return {}
+    
+    else:
+        logger.warning(f"    ⚠️  No hay plantilla para {tool_id}")
         return {}
 
 
@@ -523,34 +528,36 @@ def extraer_ultimo_mensaje_usuario(state: WhatsAppAgentState) -> str:
     return ""
 
 
-def nodo_ejecucion_herramientas(state: WhatsAppAgentState, store: BaseStore) -> Dict:
+def nodo_ejecucion_herramientas(state: WhatsAppAgentState, store: BaseStore) -> Command:
     """
-    Nodo 5: Ejecuta herramientas de Google Calendar y orquesta la respuesta
-
-    Flujo:
-    1. Obtiene herramientas seleccionadas del estado
-    2. Carga preferencias del usuario desde memory store
-    3. Inyecta contexto de tiempo de Mexicali
-    4. Ejecuta cada herramienta
-    5. Usa Orquestador (LLM) para generar respuesta natural
-    6. Agrega respuesta como AIMessage al estado
-    7. Limpia flags para próxima iteración
-
-    Args:
-        state: WhatsAppAgentState con herramientas_seleccionadas
-        store: BaseStore con memoria semántica (inyectado por LangGraph)
-
+    Nodo 5A: Ejecuta herramientas de Google Calendar y orquesta la respuesta
+    
+    MEJORAS APLICADAS:
+    ✅ Command pattern con routing directo
+    ✅ Pydantic structured output
+    ✅ Detección de estado conversacional
+    ✅ Timeout reducido (10s)
+    
     Returns:
-        Dict con 'messages' actualizado y flags limpiados
+        Command con update y goto
     """
-    log_separator(logger, "NODO_5_EJECUCION_HERRAMIENTAS", "INICIO")
+    log_separator(logger, "NODO_5A_EJECUCION_PERSONAL", "INICIO")
 
     herramientas = state.get('herramientas_seleccionadas', [])
     user_id = state.get('user_id', 'default_user')
+    estado_conversacion = state.get('estado_conversacion', 'inicial')
 
     # Log del input
-    input_data = f"herramientas_seleccionadas: {herramientas}\ncontexto_episodico: {bool(state.get('contexto_episodico'))}\nmensajes: {len(state.get('messages', []))}\nuser_id: {user_id}"
-    log_node_io(logger, "INPUT", "NODO_5_EJECUCION", input_data)
+    input_data = f"herramientas: {herramientas}\nestado: {estado_conversacion}\nuser_id: {user_id}"
+    log_node_io(logger, "INPUT", "NODO_5A_EJECUCION", input_data)
+    
+    # ✅ NUEVA VALIDACIÓN: Detectar estado conversacional
+    if estado_conversacion in ESTADOS_FLUJO_ACTIVO:
+        logger.info(f"   🔄 Flujo activo detectado (estado: {estado_conversacion}) - Saltando ejecución")
+        return Command(
+            update={},
+            goto="generacion_resumen"
+        )
 
     # ✅ Cargar preferencias y facts del usuario desde memory store
     preferencias = {}
@@ -645,11 +652,10 @@ RESPUESTA:"""
             logger.debug(f"    ⚠️  Auditoría no disponible: {audit_err}")
 
         # Agregar respuesta al estado
-        return {
-            'messages': [AIMessage(content=respuesta_texto)],
-            'herramientas_seleccionadas': [],
-            'requiere_herramientas': False
-        }
+        return Command(
+            update={'messages': [AIMessage(content=respuesta_texto)]},
+            goto="generacion_resumen"
+        )
     
     # Paso 1: Inyectar contexto de tiempo
     tiempo_contexto = get_time_context()
@@ -856,8 +862,8 @@ RESPUESTA:"""
     
     # Log de output
     output_data = f"respuesta: {respuesta_texto}\nherramientas_ejecutadas: {len(resultados)}"
-    log_node_io(logger, "OUTPUT", "NODO_5_EJECUCION", output_data)
-    log_separator(logger, "NODO_5_EJECUCION_HERRAMIENTAS", "FIN")
+    log_node_io(logger, "OUTPUT", "NODO_5A_EJECUCION", output_data)
+    log_separator(logger, "NODO_5A_EJECUCION_PERSONAL", "FIN")
 
     # ✅ AUDITORÍA: Registrar conversación con herramientas
     try:
@@ -866,30 +872,18 @@ RESPUESTA:"""
     except Exception as audit_err:
         logger.debug(f"    ⚠️  Auditoría no disponible: {audit_err}")
 
-    # Paso 4: Actualizar estado
-    return {
-        'messages': [AIMessage(content=respuesta_texto)],
-        'herramientas_seleccionadas': [],  # Limpiar
-        'requiere_herramientas': False,  # Reset
-        'ultimo_listado': state.get('ultimo_listado')  # ✅ Preservar último listado
-    }
+    # ✅ Retornar Command
+    return Command(
+        update={
+            'messages': [AIMessage(content=respuesta_texto)],
+            'herramientas_seleccionadas': [],
+            'ultimo_listado': state.get('ultimo_listado')
+        },
+        goto="generacion_resumen"
+    )
 
 
 # Wrapper para compatibilidad con grafo
-def nodo_ejecucion_herramientas_wrapper(state: WhatsAppAgentState, store: BaseStore) -> WhatsAppAgentState:
-    """
-    Wrapper que mantiene la firma esperada por el grafo.
-    Recibe store de LangGraph y lo pasa al nodo principal.
-    """
-    resultado = nodo_ejecucion_herramientas(state, store)  # ✅ Pasar store al nodo
-
-    # Actualizar estado
-    state['messages'] = state.get('messages', []) + resultado.get('messages', [])
-    state['herramientas_seleccionadas'] = resultado.get('herramientas_seleccionadas', [])
-    state['requiere_herramientas'] = resultado.get('requiere_herramientas', False)
-    
-    # ✅ NUEVO: Preservar ultimo_listado para contexto en futuras operaciones
-    if resultado.get('ultimo_listado') is not None:
-        state['ultimo_listado'] = resultado.get('ultimo_listado')
-
-    return state
+def nodo_ejecucion_herramientas_wrapper(state: WhatsAppAgentState, store: BaseStore) -> Command:
+    """Wrapper para LangGraph - retorna Command directamente."""
+    return nodo_ejecucion_herramientas(state, store)

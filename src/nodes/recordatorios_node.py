@@ -90,8 +90,16 @@ def nodo_recordatorios(state: Dict[str, Any]) -> Command:
         logger.info("    🔍 Buscando citas próximas...")
         
         ahora = get_current_time()
-        ventana_24h = ahora.add(hours=RECORDATORIO_24H)
-        ventana_2h = ahora.add(hours=RECORDATORIO_2H)
+        # Ventanas de tiempo: buscar citas en un rango de ±1 hora del objetivo
+        # Para recordatorio 24h: buscar entre 23-25 horas
+        ventana_24h_inicio = ahora.add(hours=RECORDATORIO_24H - 1)
+        ventana_24h_fin = ahora.add(hours=RECORDATORIO_24H + 1)
+        # Para recordatorio 2h: buscar entre 1.5-2.5 horas
+        ventana_2h_inicio = ahora.add(hours=RECORDATORIO_2H - 0.5)
+        ventana_2h_fin = ahora.add(hours=RECORDATORIO_2H + 0.5)
+        
+        citas_24h = []
+        citas_2h = []
         
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor(row_factory=dict_row) as cur:
@@ -112,7 +120,7 @@ def nodo_recordatorios(state: Dict[str, Any]) -> Command:
                     WHERE c.estado = 'confirmada'
                     AND c.fecha_hora_inicio BETWEEN %s AND %s
                     AND c.recordatorio_24h_enviado = FALSE
-                """, (ahora.to_datetime_string(), ventana_24h.to_datetime_string()))
+                """, (ventana_24h_inicio.to_datetime_string(), ventana_24h_fin.to_datetime_string()))
                 
                 citas_24h = cur.fetchall()
                 
@@ -133,16 +141,18 @@ def nodo_recordatorios(state: Dict[str, Any]) -> Command:
                     WHERE c.estado = 'confirmada'
                     AND c.fecha_hora_inicio BETWEEN %s AND %s
                     AND c.recordatorio_2h_enviado = FALSE
-                """, (ahora.to_datetime_string(), ventana_2h.to_datetime_string()))
+                """, (ventana_2h_inicio.to_datetime_string(), ventana_2h_fin.to_datetime_string()))
                 
                 citas_2h = cur.fetchall()
         
         logger.info(f"    📊 Recordatorios 24h: {len(citas_24h)}")
         logger.info(f"    📊 Recordatorios 2h: {len(citas_2h)}")
         
-        # 2. Enviar recordatorios
+        # 2. Enviar recordatorios y actualizar en batch
         enviados_24h = 0
         enviados_2h = 0
+        ids_exitosos_24h = []
+        ids_exitosos_2h = []
         
         # Procesar recordatorios 24h
         for cita in citas_24h:
@@ -154,21 +164,11 @@ def nodo_recordatorios(state: Dict[str, Any]) -> Command:
                     ubicacion=cita['ubicacion_consultorio'] or 'Consultorio principal'
                 )
                 
-                # Enviar WhatsApp (implementar función)
+                # Enviar WhatsApp
                 exito = enviar_whatsapp(cita['paciente_phone'], mensaje)
                 
                 if exito:
-                    # Actualizar flag
-                    with psycopg.connect(DATABASE_URL) as conn:
-                        with conn.cursor() as cur:
-                            cur.execute("""
-                                UPDATE citas_medicas
-                                SET recordatorio_24h_enviado = TRUE,
-                                    recordatorio_24h_fecha = NOW()
-                                WHERE id = %s
-                            """, (cita['id'],))
-                            conn.commit()
-                    
+                    ids_exitosos_24h.append(cita['id'])
                     enviados_24h += 1
                     logger.info(f"       ✅ Recordatorio 24h enviado a {cita['paciente_nombre']}")
                 
@@ -186,21 +186,36 @@ def nodo_recordatorios(state: Dict[str, Any]) -> Command:
                 exito = enviar_whatsapp(cita['paciente_phone'], mensaje)
                 
                 if exito:
-                    with psycopg.connect(DATABASE_URL) as conn:
-                        with conn.cursor() as cur:
-                            cur.execute("""
-                                UPDATE citas_medicas
-                                SET recordatorio_2h_enviado = TRUE,
-                                    recordatorio_2h_fecha = NOW()
-                                WHERE id = %s
-                            """, (cita['id'],))
-                            conn.commit()
-                    
+                    ids_exitosos_2h.append(cita['id'])
                     enviados_2h += 1
                     logger.info(f"       ✅ Recordatorio 2h enviado a {cita['paciente_nombre']}")
                 
             except Exception as e:
                 logger.error(f"       ❌ Error enviando: {e}")
+        
+        # 3. Actualizar flags en batch (una sola conexión)
+        if ids_exitosos_24h or ids_exitosos_2h:
+            with psycopg.connect(DATABASE_URL) as conn:
+                with conn.cursor() as cur:
+                    # Actualizar recordatorios 24h en batch
+                    if ids_exitosos_24h:
+                        cur.execute("""
+                            UPDATE citas_medicas
+                            SET recordatorio_24h_enviado = TRUE,
+                                recordatorio_24h_fecha = NOW()
+                            WHERE id = ANY(%s)
+                        """, (ids_exitosos_24h,))
+                    
+                    # Actualizar recordatorios 2h en batch
+                    if ids_exitosos_2h:
+                        cur.execute("""
+                            UPDATE citas_medicas
+                            SET recordatorio_2h_enviado = TRUE,
+                                recordatorio_2h_fecha = NOW()
+                            WHERE id = ANY(%s)
+                        """, (ids_exitosos_2h,))
+                    
+                    conn.commit()
         
         logger.info(f"    ✅ Total enviados: {enviados_24h + enviados_2h}")
         

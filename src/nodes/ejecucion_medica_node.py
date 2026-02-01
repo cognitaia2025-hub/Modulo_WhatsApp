@@ -16,10 +16,15 @@ from datetime import datetime
 import psycopg
 import os
 from dotenv import load_dotenv
+from langgraph.types import Command
 
 from src.state.agent_state import WhatsAppAgentState
 from src.medical.tools import MEDICAL_TOOLS
 from src.medical.turnos import actualizar_control_turnos
+from src.utils.logging_config import (
+    log_separator,
+    log_node_io
+)
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -44,6 +49,16 @@ HERRAMIENTAS_SOLO_DOCTOR = [
 HERRAMIENTAS_PACIENTE_EXTERNO = [
     "consultar_slots_disponibles",
     "agendar_cita_medica_completa"
+]
+
+# ==================== CONSTANTES ====================
+
+# Estados conversacionales que requieren saltar ejecución
+ESTADOS_FLUJO_ACTIVO = [
+    'esperando_confirmacion_medica',
+    'recolectando_datos_paciente',
+    'recolectando_fecha_cita',
+    'recolectando_sintomas'
 ]
 
 
@@ -237,50 +252,73 @@ def ejecutar_herramienta_con_validaciones(
         return error_msg
 
 
-def nodo_ejecucion_medica(state: WhatsAppAgentState) -> Dict:
+def nodo_ejecucion_medica(state: WhatsAppAgentState) -> Command:
     """
-    Nodo de ejecución de herramientas médicas
+    Nodo 5B: Ejecución de herramientas médicas
+    
+    MEJORAS APLICADAS:
+    ✅ Command pattern con routing directo
+    ✅ Detección de estado conversacional
+    ✅ Logging estructurado
     
     Flujo:
-    1. Obtiene herramientas seleccionadas del state
-    2. Obtiene doctor_phone si el usuario es doctor
-    3. Para cada herramienta:
+    1. Verifica estado conversacional (saltar si activo)
+    2. Obtiene herramientas seleccionadas
+    3. Obtiene doctor_phone si es doctor
+    4. Para cada herramienta:
        - Valida permisos
-       - Inyecta doctor_phone si es necesario
+       - Inyecta doctor_phone si necesario
        - Ejecuta la herramienta
        - Actualiza control_turnos si fue agendamiento
-    4. Retorna resultados
+    5. Retorna resultados
     
-    Args:
-        state: WhatsAppAgentState
-        
     Returns:
-        Dict con actualizaciones del state
+        Command con update y goto
     """
-    logger.info("\n" + "=" * 70)
-    logger.info("🔧 NODO: EJECUCIÓN MÉDICA")
-    logger.info("=" * 70)
+    log_separator(logger, "NODO_5B_EJECUCION_MEDICA", "INICIO")
     
     # Obtener datos del state
     herramientas_seleccionadas = state.get("herramientas_seleccionadas", [])
     tipo_usuario = state.get("tipo_usuario", "")
+    estado_conversacion = state.get("estado_conversacion", "inicial")
     doctor_phone = obtener_doctor_phone_from_state(state)
     
-    logger.info(f"👤 Tipo usuario: {tipo_usuario}")
-    logger.info(f"📞 Doctor phone: {doctor_phone}")
-    logger.info(f"🔧 Herramientas a ejecutar: {len(herramientas_seleccionadas)}")
+    # Log del input
+    input_data = f"herramientas: {len(herramientas_seleccionadas)}\ntipo_usuario: {tipo_usuario}\nestado: {estado_conversacion}\ndoctor_phone: {doctor_phone}"
+    log_node_io(logger, "INPUT", "NODO_5B_EJECUCION", input_data)
     
+    logger.info(f"    👤 Tipo usuario: {tipo_usuario}")
+    logger.info(f"    📞 Doctor phone: {doctor_phone}")
+    logger.info(f"    🔄 Estado: {estado_conversacion}")
+    
+    # ✅ NUEVA VALIDACIÓN: Detectar estado conversacional
+    if estado_conversacion in ESTADOS_FLUJO_ACTIVO:
+        logger.info(f"    🔄 Flujo activo detectado (estado: {estado_conversacion}) - Saltando ejecución")
+        return Command(
+            update={
+                "resultado_herramientas": "Esperando confirmación del usuario",
+                "herramientas_ejecutadas": []
+            },
+            goto="generacion_resumen"
+        )
+    
+    # Validar herramientas
     if not herramientas_seleccionadas:
-        logger.info("ℹ️  No hay herramientas para ejecutar")
-        return {
-            "resultado_herramientas": "No se seleccionaron herramientas para ejecutar"
-        }
+        logger.info("    ℹ️  No hay herramientas para ejecutar")
+        return Command(
+            update={
+                "resultado_herramientas": "No se seleccionaron herramientas para ejecutar",
+                "herramientas_ejecutadas": []
+            },
+            goto="generacion_resumen"
+        )
+    
+    logger.info(f"    🔧 Herramientas a ejecutar: {len(herramientas_seleccionadas)}")
     
     resultados = []
     
     # Ejecutar cada herramienta
     for item in herramientas_seleccionadas:
-        # item puede ser string (nombre) o dict (nombre + argumentos)
         if isinstance(item, str):
             nombre = item
             argumentos = {}
@@ -288,11 +326,11 @@ def nodo_ejecucion_medica(state: WhatsAppAgentState) -> Dict:
             nombre = item.get("nombre", item.get("tool", ""))
             argumentos = item.get("argumentos", item.get("args", {}))
         else:
-            logger.warning(f"⚠️  Formato inválido de herramienta: {item}")
+            logger.warning(f"    ⚠️  Formato inválido: {item}")
             continue
         
         logger.info(f"\n{'=' * 50}")
-        logger.info(f"Herramienta {len(resultados) + 1}/{len(herramientas_seleccionadas)}")
+        logger.info(f"    Herramienta {len(resultados) + 1}/{len(herramientas_seleccionadas)}")
         
         # Ejecutar con validaciones
         resultado = ejecutar_herramienta_con_validaciones(
@@ -308,7 +346,7 @@ def nodo_ejecucion_medica(state: WhatsAppAgentState) -> Dict:
             "exitoso": "✅" in resultado
         })
     
-    # Formatear resultados para el state
+    # Formatear resultados
     resultados_formateados = "\n\n".join([
         f"**{r['herramienta']}:**\n{r['resultado']}"
         for r in resultados
@@ -316,36 +354,23 @@ def nodo_ejecucion_medica(state: WhatsAppAgentState) -> Dict:
     
     exitosos = sum(1 for r in resultados if r["exitoso"])
     
-    logger.info("\n" + "=" * 70)
-    logger.info(f"✅ Ejecución completada: {exitosos}/{len(resultados)} exitosas")
-    logger.info("=" * 70 + "\n")
+    # Log de output
+    output_data = f"ejecutadas: {exitosos}/{len(resultados)}"
+    log_node_io(logger, "OUTPUT", "NODO_5B_EJECUCION", output_data)
+    logger.info(f"    ✅ Ejecución completada: {exitosos}/{len(resultados)} exitosas")
+    log_separator(logger, "NODO_5B_EJECUCION_MEDICA", "FIN")
     
-    return {
-        "resultado_herramientas": resultados_formateados,
-        "herramientas_ejecutadas": resultados
-    }
+    # ✅ Retornar Command
+    return Command(
+        update={
+            "resultado_herramientas": resultados_formateados,
+            "herramientas_ejecutadas": resultados
+        },
+        goto="generacion_resumen"
+    )
 
 
 # Wrapper para compatibilidad con grafo
-def nodo_ejecucion_medica_wrapper(state: WhatsAppAgentState) -> WhatsAppAgentState:
-    """
-    Wrapper que mantiene la firma esperada por el grafo
-    """
-    try:
-        # Llamar al nodo principal
-        resultado = nodo_ejecucion_medica(state)
-        
-        # Actualizar state con resultado
-        state.update(resultado)
-        
-        # Retornar el estado completo
-        return state
-        
-    except Exception as e:
-        logger.error(f"❌ Error en nodo ejecución médica: {e}")
-        
-        # Respuesta de fallback
-        state["resultado_herramientas"] = f"Error ejecutando herramientas médicas: {e}"
-        state["herramientas_ejecutadas"] = []
-        
-        return state
+def nodo_ejecucion_medica_wrapper(state: WhatsAppAgentState) -> Command:
+    """Wrapper para LangGraph - retorna Command directamente."""
+    return nodo_ejecucion_medica(state)

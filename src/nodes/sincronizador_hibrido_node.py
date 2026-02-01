@@ -164,6 +164,7 @@ def nodo_sincronizador_hibrido(state: Dict[str, Any]) -> Command:
         
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor(row_factory=dict_row) as cur:
+                # Use explicit casting to avoid SQL injection risks
                 cur.execute("""
                     SELECT 
                         c.id,
@@ -174,7 +175,7 @@ def nodo_sincronizador_hibrido(state: Dict[str, Any]) -> Command:
                         c.estado
                     FROM citas_medicas c
                     WHERE c.fecha_hora >= NOW()
-                    AND c.fecha_hora <= NOW() + INTERVAL '%s days'
+                    AND c.fecha_hora <= NOW() + make_interval(days => %s)
                 """, (SYNC_WINDOW_DAYS,))
                 
                 citas_bd = cur.fetchall()

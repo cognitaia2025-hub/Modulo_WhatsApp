@@ -253,8 +253,9 @@ def test_timeout_reducido():
     from src.nodes.seleccion_herramientas_node import llm_primary_base, llm_fallback_base
     
     # Verificar que los timeouts sean 10s
-    assert llm_primary_base.timeout == 10.0
-    assert llm_fallback_base.timeout == 10.0
+    # OpenAI usa request_timeout, Anthropic usa default_request_timeout
+    assert llm_primary_base.request_timeout == 10.0
+    assert llm_fallback_base.default_request_timeout == 10.0
 
 
 def test_lista_vacia_cuando_no_necesita_herramientas(estado_con_doctor, mock_obtener_herramientas, mocker):

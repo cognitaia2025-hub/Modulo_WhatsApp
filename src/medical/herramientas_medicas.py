@@ -662,3 +662,338 @@ def buscar_citas_por_periodo(
             'exito': False,
             'error': str(e)
         }
+
+
+# ==================== LANGCHAIN TOOLS ====================
+# Herramientas para uso con ToolNode de LangGraph
+
+from langchain_core.tools import tool
+
+@tool
+def buscar_disponibilidad_tool(
+    doctor_id: Optional[int] = None,
+    fecha: Optional[str] = None,
+    especialidad: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Busca disponibilidad de doctores para agendar citas.
+    
+    Args:
+        doctor_id: ID del doctor específico (opcional)
+        fecha: Fecha a consultar en formato YYYY-MM-DD (opcional, default: hoy)
+        especialidad: Filtrar por especialidad del doctor (opcional)
+    
+    Returns:
+        Dict con horarios disponibles por doctor
+    """
+    try:
+        with get_db_session() as db:
+            # Determinar fecha
+            if fecha:
+                fecha_consulta = datetime.strptime(fecha, '%Y-%m-%d').date()
+            else:
+                fecha_consulta = date.today()
+            
+            dia_semana = fecha_consulta.weekday()
+            
+            # Query base de disponibilidad
+            query = db.query(DisponibilidadMedica).filter(
+                DisponibilidadMedica.dia_semana == dia_semana,
+                DisponibilidadMedica.disponible == True
+            )
+            
+            if doctor_id:
+                query = query.filter(DisponibilidadMedica.doctor_id == doctor_id)
+            
+            disponibilidades = query.all()
+            
+            resultados = []
+            for disp in disponibilidades:
+                doctor = db.query(Doctores).get(disp.doctor_id)
+                if not doctor:
+                    continue
+                    
+                # Filtrar por especialidad si se especifica
+                if especialidad and especialidad.lower() not in doctor.especialidad.lower():
+                    continue
+                
+                # Obtener citas existentes para esa fecha
+                citas_existentes = db.query(CitasMedicas).filter(
+                    CitasMedicas.doctor_id == disp.doctor_id,
+                    func.date(CitasMedicas.fecha_hora_inicio) == fecha_consulta,
+                    CitasMedicas.estado.in_([EstadoCita.confirmada, EstadoCita.pendiente])
+                ).all()
+                
+                # Calcular slots disponibles
+                horas_ocupadas = [c.fecha_hora_inicio.time() for c in citas_existentes]
+                
+                slots_disponibles = []
+                hora_actual = datetime.combine(fecha_consulta, disp.hora_inicio)
+                hora_fin = datetime.combine(fecha_consulta, disp.hora_fin)
+                
+                while hora_actual < hora_fin:
+                    if hora_actual.time() not in horas_ocupadas:
+                        slots_disponibles.append(hora_actual.strftime('%H:%M'))
+                    hora_actual += timedelta(minutes=disp.duracion_cita)
+                
+                if slots_disponibles:
+                    resultados.append({
+                        'doctor_id': doctor.id,
+                        'doctor_nombre': doctor.nombre_completo,
+                        'especialidad': doctor.especialidad,
+                        'fecha': fecha_consulta.isoformat(),
+                        'slots_disponibles': slots_disponibles,
+                        'duracion_cita_min': disp.duracion_cita
+                    })
+            
+            return {
+                'exito': True,
+                'fecha_consultada': fecha_consulta.isoformat(),
+                'total_doctores': len(resultados),
+                'disponibilidad': resultados
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Error buscando disponibilidad: {e}")
+        return {
+            'exito': False,
+            'error': str(e)
+        }
+
+
+@tool
+def agendar_cita_tool(
+    paciente_id: int,
+    doctor_id: int,
+    fecha: str,
+    hora: str,
+    motivo: str = "Consulta general",
+    tipo_consulta: str = "general"
+) -> Dict[str, Any]:
+    """
+    Agenda una nueva cita médica.
+    
+    Args:
+        paciente_id: ID del paciente
+        doctor_id: ID del doctor
+        fecha: Fecha de la cita en formato YYYY-MM-DD
+        hora: Hora de la cita en formato HH:MM
+        motivo: Motivo de la consulta
+        tipo_consulta: Tipo de consulta (general, seguimiento, urgente, especialidad)
+    
+    Returns:
+        Dict con los detalles de la cita creada
+    """
+    try:
+        with get_db_session() as db:
+            # Verificar que paciente existe
+            paciente = db.query(Pacientes).get(paciente_id)
+            if not paciente:
+                return {'exito': False, 'error': f'Paciente {paciente_id} no encontrado'}
+            
+            # Verificar que doctor existe
+            doctor = db.query(Doctores).get(doctor_id)
+            if not doctor:
+                return {'exito': False, 'error': f'Doctor {doctor_id} no encontrado'}
+            
+            # Parsear fecha y hora
+            fecha_hora_inicio = datetime.strptime(f"{fecha} {hora}", '%Y-%m-%d %H:%M')
+            
+            # Obtener duración de cita del doctor
+            disponibilidad = db.query(DisponibilidadMedica).filter(
+                DisponibilidadMedica.doctor_id == doctor_id,
+                DisponibilidadMedica.dia_semana == fecha_hora_inicio.weekday()
+            ).first()
+            
+            duracion = disponibilidad.duracion_cita if disponibilidad else 30
+            fecha_hora_fin = fecha_hora_inicio + timedelta(minutes=duracion)
+            
+            # Verificar que no hay conflicto
+            cita_existente = db.query(CitasMedicas).filter(
+                CitasMedicas.doctor_id == doctor_id,
+                CitasMedicas.fecha_hora_inicio == fecha_hora_inicio,
+                CitasMedicas.estado.in_([EstadoCita.confirmada, EstadoCita.pendiente])
+            ).first()
+            
+            if cita_existente:
+                return {
+                    'exito': False,
+                    'error': f'Ya existe una cita a las {hora} con este doctor'
+                }
+            
+            # Mapear tipo de consulta
+            tipo_map = {
+                'general': TipoConsulta.general,
+                'seguimiento': TipoConsulta.seguimiento,
+                'urgente': TipoConsulta.urgente,
+                'especialidad': TipoConsulta.especialidad
+            }
+            tipo = tipo_map.get(tipo_consulta.lower(), TipoConsulta.general)
+            
+            # Crear la cita
+            nueva_cita = CitasMedicas(
+                paciente_id=paciente_id,
+                doctor_id=doctor_id,
+                fecha_hora_inicio=fecha_hora_inicio,
+                fecha_hora_fin=fecha_hora_fin,
+                estado=EstadoCita.pendiente,
+                tipo_consulta=tipo,
+                motivo_consulta=motivo
+            )
+            
+            db.add(nueva_cita)
+            db.commit()
+            db.refresh(nueva_cita)
+            
+            logger.info(f"✅ Cita agendada: {paciente.nombre_completo} con {doctor.nombre_completo} - {fecha} {hora}")
+            
+            return {
+                'exito': True,
+                'cita_id': nueva_cita.id,
+                'paciente': paciente.nombre_completo,
+                'doctor': doctor.nombre_completo,
+                'especialidad': doctor.especialidad,
+                'fecha_hora': fecha_hora_inicio.isoformat(),
+                'duracion_min': duracion,
+                'estado': 'pendiente'
+            }
+            
+    except ValueError as e:
+        return {'exito': False, 'error': f'Formato de fecha/hora inválido: {e}'}
+    except Exception as e:
+        logger.error(f"❌ Error agendando cita: {e}")
+        return {'exito': False, 'error': str(e)}
+
+
+@tool
+def cancelar_cita_tool(
+    cita_id: int,
+    motivo_cancelacion: str = "Cancelado por el paciente"
+) -> Dict[str, Any]:
+    """
+    Cancela una cita médica existente.
+    
+    Args:
+        cita_id: ID de la cita a cancelar
+        motivo_cancelacion: Razón de la cancelación
+    
+    Returns:
+        Dict con el resultado de la operación
+    """
+    try:
+        with get_db_session() as db:
+            cita = db.query(CitasMedicas).get(cita_id)
+            
+            if not cita:
+                return {'exito': False, 'error': f'Cita {cita_id} no encontrada'}
+            
+            if cita.estado == EstadoCita.cancelada:
+                return {'exito': False, 'error': 'La cita ya está cancelada'}
+            
+            if cita.estado == EstadoCita.completada:
+                return {'exito': False, 'error': 'No se puede cancelar una cita completada'}
+            
+            # Obtener info antes de cancelar
+            doctor = db.query(Doctores).get(cita.doctor_id)
+            paciente = db.query(Pacientes).get(cita.paciente_id)
+            
+            # Cancelar
+            cita.estado = EstadoCita.cancelada
+            cita.notas_privadas = f"Cancelación: {motivo_cancelacion}"
+            cita.updated_at = datetime.now()
+            
+            db.commit()
+            
+            logger.info(f"✅ Cita {cita_id} cancelada: {motivo_cancelacion}")
+            
+            return {
+                'exito': True,
+                'cita_id': cita_id,
+                'paciente': paciente.nombre_completo if paciente else 'Desconocido',
+                'doctor': doctor.nombre_completo if doctor else 'Desconocido',
+                'fecha_hora_original': cita.fecha_hora_inicio.isoformat(),
+                'motivo_cancelacion': motivo_cancelacion
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Error cancelando cita: {e}")
+        return {'exito': False, 'error': str(e)}
+
+
+@tool
+def listar_citas_tool(
+    paciente_id: Optional[int] = None,
+    doctor_id: Optional[int] = None,
+    fecha_inicio: Optional[str] = None,
+    fecha_fin: Optional[str] = None,
+    estado: Optional[str] = None,
+    limite: int = 20
+) -> Dict[str, Any]:
+    """
+    Lista citas médicas con filtros opcionales.
+    
+    Args:
+        paciente_id: Filtrar por paciente específico (opcional)
+        doctor_id: Filtrar por doctor específico (opcional)
+        fecha_inicio: Fecha inicio del rango YYYY-MM-DD (opcional)
+        fecha_fin: Fecha fin del rango YYYY-MM-DD (opcional)
+        estado: Filtrar por estado: pendiente, confirmada, completada, cancelada (opcional)
+        limite: Número máximo de resultados (default: 20)
+    
+    Returns:
+        Dict con lista de citas
+    """
+    try:
+        with get_db_session() as db:
+            query = db.query(CitasMedicas)
+            
+            if paciente_id:
+                query = query.filter(CitasMedicas.paciente_id == paciente_id)
+            
+            if doctor_id:
+                query = query.filter(CitasMedicas.doctor_id == doctor_id)
+            
+            if fecha_inicio:
+                fecha_ini = datetime.strptime(fecha_inicio, '%Y-%m-%d')
+                query = query.filter(CitasMedicas.fecha_hora_inicio >= fecha_ini)
+            
+            if fecha_fin:
+                fecha_f = datetime.strptime(fecha_fin, '%Y-%m-%d') + timedelta(days=1)
+                query = query.filter(CitasMedicas.fecha_hora_inicio < fecha_f)
+            
+            if estado:
+                estado_map = {
+                    'pendiente': EstadoCita.pendiente,
+                    'confirmada': EstadoCita.confirmada,
+                    'completada': EstadoCita.completada,
+                    'cancelada': EstadoCita.cancelada
+                }
+                if estado.lower() in estado_map:
+                    query = query.filter(CitasMedicas.estado == estado_map[estado.lower()])
+            
+            citas = query.order_by(CitasMedicas.fecha_hora_inicio.desc()).limit(limite).all()
+            
+            resultados = []
+            for cita in citas:
+                doctor = db.query(Doctores).get(cita.doctor_id)
+                paciente = db.query(Pacientes).get(cita.paciente_id)
+                
+                resultados.append({
+                    'cita_id': cita.id,
+                    'paciente': paciente.nombre_completo if paciente else 'Desconocido',
+                    'doctor': doctor.nombre_completo if doctor else 'Desconocido',
+                    'especialidad': doctor.especialidad if doctor else None,
+                    'fecha_hora': cita.fecha_hora_inicio.isoformat(),
+                    'estado': cita.estado.value,
+                    'motivo': cita.motivo_consulta
+                })
+            
+            return {
+                'exito': True,
+                'total': len(resultados),
+                'citas': resultados
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Error listando citas: {e}")
+        return {'exito': False, 'error': str(e)}

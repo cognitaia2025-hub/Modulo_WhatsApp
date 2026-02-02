@@ -122,7 +122,7 @@ llm_primary_base = ChatOpenAI(
 )
 
 llm_fallback_base = ChatAnthropic(
-    model="claude-3-5-haiku-20241022",
+    model="claude-sonnet-4-20250514",
     temperature=0,
     max_tokens=200,
     api_key=os.getenv("ANTHROPIC_API_KEY"),
@@ -130,17 +130,14 @@ llm_fallback_base = ChatAnthropic(
     max_retries=0
 )
 
-# Configurar structured output
+# Configurar structured output (sin json_schema para compatibilidad)
 llm_primary = llm_primary_base.with_structured_output(
     SeleccionHerramientas,
-    method="json_schema",
-    strict=True
+    method="json_mode"
 )
 
 llm_fallback = llm_fallback_base.with_structured_output(
-    SeleccionHerramientas,
-    method="json_schema",
-    strict=True
+    SeleccionHerramientas
 )
 
 # Selector con fallback automático

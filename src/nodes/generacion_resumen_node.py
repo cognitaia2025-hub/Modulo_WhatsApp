@@ -44,9 +44,9 @@ llm_primary = ChatOpenAI(
     max_retries=0
 )
 
-# Fallback: Claude Haiku 4.5
+# Fallback: Claude Sonnet
 llm_fallback = ChatAnthropic(
-    model="claude-3-5-haiku-20241022",
+    model="claude-sonnet-4-20250514",
     temperature=0.2,
     max_tokens=120,
     api_key=os.getenv("ANTHROPIC_API_KEY"),
@@ -65,6 +65,80 @@ ESTADOS_SIN_RESUMEN = [
     'recolectando_datos',
     'procesando_pago'
 ]
+
+# Categorías de resumen para clustering semántico
+CATEGORIAS_RESUMEN = {
+    'cita': ['agendar', 'cita', 'turno', 'horario', 'disponibilidad', 'reservar', 'consulta'],
+    'sintoma': ['dolor', 'molestia', 'síntoma', 'malestar', 'fiebre', 'ardor', 'inflamación'],
+    'recordatorio': ['recordatorio', 'confirmar', 'confirmó', 'asistir', 'llegará', 'vendrá'],
+    'diagnostico': ['diagnóstico', 'resultado', 'examen', 'análisis', 'estudio', 'radiografía'],
+    'tratamiento': ['medicamento', 'receta', 'tratamiento', 'indicaciones', 'dosis', 'pastilla'],
+    'historial': ['historial', 'antecedentes', 'alergias', 'padecimiento', 'crónico'],
+    'cancelacion': ['cancelar', 'canceló', 'reagendar', 'posponer', 'reprogramar'],
+}
+
+
+def clasificar_categoria(resumen: str) -> str:
+    """
+    Clasifica automáticamente la categoría del resumen basándose en palabras clave.
+    
+    Args:
+        resumen: Texto del resumen a clasificar
+        
+    Returns:
+        Categoría detectada o 'general' si no coincide ninguna
+    """
+    resumen_lower = resumen.lower()
+    
+    for categoria, palabras in CATEGORIAS_RESUMEN.items():
+        for palabra in palabras:
+            if palabra in resumen_lower:
+                return categoria
+    
+    return 'general'
+
+
+def extraer_fecha_evento(resumen: str) -> str:
+    """
+    Intenta extraer una fecha mencionada en el resumen.
+    
+    Args:
+        resumen: Texto del resumen
+        
+    Returns:
+        Fecha en formato YYYY-MM-DD o None
+    """
+    import re
+    from datetime import datetime, timedelta
+    
+    resumen_lower = resumen.lower()
+    
+    # Patrones de fecha
+    # "4 de febrero de 2025", "febrero 4, 2025"
+    patron_fecha = r'(\d{1,2})\s+de\s+(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\s+(?:de\s+)?(\d{4})'
+    match = re.search(patron_fecha, resumen_lower)
+    
+    if match:
+        meses = {
+            'enero': 1, 'febrero': 2, 'marzo': 3, 'abril': 4,
+            'mayo': 5, 'junio': 6, 'julio': 7, 'agosto': 8,
+            'septiembre': 9, 'octubre': 10, 'noviembre': 11, 'diciembre': 12
+        }
+        dia = int(match.group(1))
+        mes = meses.get(match.group(2), 1)
+        año = int(match.group(3))
+        try:
+            return datetime(año, mes, dia).strftime('%Y-%m-%d')
+        except:
+            pass
+    
+    # "mañana", "hoy"
+    if 'mañana' in resumen_lower:
+        return (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
+    if 'hoy' in resumen_lower:
+        return datetime.now().strftime('%Y-%m-%d')
+    
+    return None
 
 
 def extraer_mensajes_relevantes(messages: List[Any]) -> str:
@@ -141,17 +215,27 @@ Prioriza:
 - Contexto necesario para continuar sin repetir información
 """
     
-    prompt = f"""Resume esta conversación de WhatsApp en MÁXIMO 50 PALABRAS.
+    prompt = f"""Genera un resumen NARRATIVO de esta conversación médica.
 
 FECHA: {timestamp}
 {contexto_previo}
 CONVERSACIÓN:
 {conversacion}
 {enfoque_especial}
-Incluye: (1) Qué se hizo, (2) Qué falta, (3) Estado (completada/pendiente).
-Usa texto plano SIN formato markdown. Sé directo y conciso.
 
-Si no hay info relevante, responde solo: "Sin cambios relevantes"
+INSTRUCCIONES:
+1. Escribe en TERCERA PERSONA como si narraras lo que sucedió
+2. Incluye: qué informó/preguntó el paciente, qué se le indicó/respondió
+3. Si hay cita, incluye fecha y hora específica
+4. Máximo 2-3 oraciones concisas
+
+EJEMPLOS DE FORMATO CORRECTO:
+- "El paciente informó que le dolía la uña del pie izquierdo y se le indicó que no usara calcetines hasta su cita del 4 de febrero de 2025"
+- "Se envió recordatorio al paciente para su cita, quien confirmó que asistiría mañana 4 de febrero de 2025"
+- "El paciente consultó sobre disponibilidad y se le agendó cita con Dr. García para el lunes 10 a las 3pm"
+
+Respuesta en UNA línea, sin bullets ni markdown.
+Si no hay info médica relevante: "Sin cambios médicos relevantes"
 
 RESUMEN:"""
     
@@ -248,14 +332,26 @@ def nodo_generacion_resumen(state: Dict[str, Any], store: BaseStore) -> Command:
         except Exception as pref_error:
             logger.error(f"    ❌ Error preferencias: {pref_error}")
         
+        # ✅ Clasificar categoría automáticamente
+        categoria = clasificar_categoria(resumen)
+        fecha_evento = extraer_fecha_evento(resumen)
+        
+        logger.info(f"    🏷️  Categoría: {categoria}")
+        if fecha_evento:
+            logger.info(f"    📅 Fecha evento: {fecha_evento}")
+        
         # Log de output
-        output_data = f"resumen_chars: {len(resumen)}"
+        output_data = f"resumen_chars: {len(resumen)} | categoria: {categoria}"
         log_node_io(logger, "OUTPUT", "NODO_6_RESUMEN", output_data)
         log_separator(logger, "NODO_6_GENERACION_RESUMEN", "FIN")
         
-        # ✅ Retornar Command
+        # ✅ Retornar Command con metadata adicional
         return Command(
-            update={'resumen_actual': resumen_con_fecha},
+            update={
+                'resumen_actual': resumen_con_fecha,
+                'resumen_categoria': categoria,
+                'resumen_fecha_evento': fecha_evento
+            },
             goto="persistencia_episodica"
         )
         

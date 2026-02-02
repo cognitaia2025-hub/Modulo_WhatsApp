@@ -64,7 +64,7 @@ class ClasificacionResponse(BaseModel):
 
 # ==================== CONFIGURACIÓN LLM CON STRUCTURED OUTPUT ====================
 
-# LLM primario: DeepSeek con structured output
+# LLM primario: DeepSeek con JSON mode (más compatible)
 llm_primary_base = ChatOpenAI(
     model="deepseek-chat",
     temperature=0,
@@ -75,9 +75,9 @@ llm_primary_base = ChatOpenAI(
     max_retries=0
 )
 
-# LLM fallback: Claude con structured output
+# LLM fallback: Claude Sonnet (soporta structured output)
 llm_fallback_base = ChatAnthropic(
-    model="claude-3-5-haiku-20241022",
+    model="claude-sonnet-4-20250514",
     temperature=0,
     max_tokens=200,
     api_key=os.getenv("ANTHROPIC_API_KEY"),
@@ -85,17 +85,14 @@ llm_fallback_base = ChatAnthropic(
     max_retries=0
 )
 
-# Configurar structured output
+# Configurar structured output - usar method="json_mode" para mayor compatibilidad
 llm_primary = llm_primary_base.with_structured_output(
     ClasificacionResponse,
-    method="json_schema",
-    strict=True
+    method="json_mode"
 )
 
 llm_fallback = llm_fallback_base.with_structured_output(
-    ClasificacionResponse,
-    method="json_schema",
-    strict=True
+    ClasificacionResponse
 )
 
 
@@ -195,7 +192,7 @@ Salida: {"clasificacion": "medica", "confianza": 0.96, "razonamiento": "Doctor s
 Mensaje: "{mensaje_usuario}"
 Tipo de usuario: {tipo_usuario}
 
-Analiza el mensaje y responde con la clasificación correcta."""
+Analiza el mensaje y responde en formato JSON con la clasificación correcta."""
 
     return [
         SystemMessage(content=system_prompt),

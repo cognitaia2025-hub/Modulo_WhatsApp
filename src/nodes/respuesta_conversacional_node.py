@@ -43,9 +43,9 @@ llm_primary = ChatOpenAI(
     max_retries=0
 )
 
-# Fallback: Claude Haiku (respuestas rápidas)
+# Fallback: Claude Sonnet (respuestas rápidas)
 llm_fallback = ChatAnthropic(
-    model="claude-3-5-haiku-20241022",
+    model="claude-sonnet-4-20250514",
     temperature=0.7,
     max_tokens=200,
     api_key=os.getenv("ANTHROPIC_API_KEY"),

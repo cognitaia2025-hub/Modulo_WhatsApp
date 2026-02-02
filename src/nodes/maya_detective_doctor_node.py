@@ -75,7 +75,7 @@ llm_primary = ChatOpenAI(
 )
 
 llm_fallback = ChatAnthropic(
-    model="claude-3-5-haiku-20241022",
+    model="claude-sonnet-4-20250514",
     temperature=0.7,
     max_tokens=400,
     api_key=os.getenv("ANTHROPIC_API_KEY"),
@@ -85,9 +85,7 @@ llm_fallback = ChatAnthropic(
 
 llm_maya_doctor = llm_primary.with_fallbacks([llm_fallback])
 structured_llm_doctor = llm_maya_doctor.with_structured_output(
-    MayaResponseDoctor,
-    method="json_schema",
-    strict=True
+    MayaResponseDoctor
 )
 
 

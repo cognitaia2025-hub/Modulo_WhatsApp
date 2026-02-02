@@ -62,9 +62,9 @@ llm_primary = ChatOpenAI(
     max_retries=0
 )
 
-# LLM fallback: Claude
+# LLM fallback: Claude Sonnet (soporta structured output)
 llm_fallback = ChatAnthropic(
-    model="claude-3-5-haiku-20241022",
+    model="claude-sonnet-4-20250514",
     temperature=0.1,
     max_tokens=300,
     api_key=os.getenv("ANTHROPIC_API_KEY"),
@@ -74,7 +74,7 @@ llm_fallback = ChatAnthropic(
 
 # LLM con fallback automático y structured output
 llm_with_fallback = llm_primary.with_fallbacks([llm_fallback])
-llm_structured = llm_with_fallback.with_structured_output(MayaResponse, strict=True)
+llm_structured = llm_with_fallback.with_structured_output(MayaResponse)
 
 
 # ==================== INFORMACIÓN CLÍNICA ====================

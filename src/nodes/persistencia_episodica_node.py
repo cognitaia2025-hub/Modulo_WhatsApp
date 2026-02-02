@@ -91,21 +91,30 @@ def guardar_en_pgvector(
     user_id: str,
     session_id: str,
     resumen: str,
-    embedding: List[float]
+    embedding: List[float],
+    tipo_usuario: str = 'paciente',
+    categoria: str = 'general',
+    fecha_evento: str = None,
+    nombre_usuario: str = None,
+    doctor_id: str = None
 ) -> Optional[int]:
     """
     Guarda el resumen y su embedding en PostgreSQL con pgvector.
     
-    MEJORAS:
-    ✅ Usa psycopg3 con context managers
-    ✅ Simplificado - metadata básica
-    ✅ Retorna ID del episodio creado
+    MEJORAS v2:
+    ✅ Nuevos campos: tipo_usuario, categoria, fecha_evento, nombre_usuario, doctor_id
+    ✅ grupo_visual = user_id para clustering por usuario
     
     Args:
         user_id: ID del usuario de WhatsApp
         session_id: ID de la sesión
         resumen: Texto del resumen generado
         embedding: Vector de 384 dimensiones
+        tipo_usuario: 'paciente' (azul) o 'doctor' (blanco)
+        categoria: cita, sintoma, recordatorio, etc.
+        fecha_evento: Fecha del evento mencionado (YYYY-MM-DD)
+        nombre_usuario: Nombre legible del usuario
+        doctor_id: ID del doctor asociado (para pacientes)
         
     Returns:
         ID del episodio creado o None si falla
@@ -113,19 +122,21 @@ def guardar_en_pgvector(
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
-                # Query de inserción simplificada
+                # Query de inserción con nuevos campos
                 cur.execute("""
                     INSERT INTO memoria_episodica 
-                    (user_id, resumen, embedding, timestamp)
-                    VALUES (%s, %s, %s, NOW())
+                    (user_id, resumen, embedding, timestamp, tipo_usuario, categoria, 
+                     fecha_evento, nombre_usuario, doctor_id, grupo_visual)
+                    VALUES (%s, %s, %s, NOW(), %s, %s, %s, %s, %s, %s)
                     RETURNING id
-                """, (user_id, resumen, embedding))
+                """, (user_id, resumen, embedding, tipo_usuario, categoria,
+                      fecha_evento, nombre_usuario, doctor_id, user_id))  # grupo_visual = user_id
                 
                 episodio_id = cur.fetchone()[0]
                 conn.commit()
                 
                 logger.info(f"    ✅ Episodio guardado en memoria episódica (ID: {episodio_id})")
-                logger.info(f"    📊 Vector: 384 dims | User: {user_id}")
+                logger.info(f"    📊 Vector: 384 dims | User: {user_id} | Tipo: {tipo_usuario} | Cat: {categoria}")
                 
                 return episodio_id
                 
@@ -168,6 +179,14 @@ def nodo_persistencia_episodica(state: Dict[str, Any]) -> Command:
     user_id = state.get('user_id', 'default_user')
     session_id = state.get('session_id', 'unknown')
     estado_conversacion = state.get('estado_conversacion', 'inicial')
+    
+    # ✅ Nuevos campos para visualización de vectores
+    categoria = state.get('resumen_categoria', 'general')
+    fecha_evento = state.get('resumen_fecha_evento', None)
+    nombre_usuario = state.get('nombre_usuario', None)
+    # Detectar tipo de usuario (paciente por defecto, doctor si tiene prefijo)
+    tipo_usuario = 'doctor' if user_id.startswith('doctor_') else 'paciente'
+    doctor_id = state.get('doctor_id', None)
     
     # Log del input
     input_data = f"resumen_len: {len(resumen_actual)}\nuser_id: {user_id}\nestado: {estado_conversacion}"
@@ -220,12 +239,18 @@ def nodo_persistencia_episodica(state: Dict[str, Any]) -> Command:
         
         # Insertar en BD con psycopg3
         logger.info("    💾 Insertando en memoria_episodica...")
+        logger.info(f"    🏷️  Tipo: {tipo_usuario} | Categoría: {categoria}")
         
         episodio_id = guardar_en_pgvector(
             user_id=user_id,
             session_id=session_id,
             resumen=resumen_actual,
-            embedding=embedding
+            embedding=embedding,
+            tipo_usuario=tipo_usuario,
+            categoria=categoria,
+            fecha_evento=fecha_evento,
+            nombre_usuario=nombre_usuario,
+            doctor_id=doctor_id
         )
         
         if episodio_id is None:

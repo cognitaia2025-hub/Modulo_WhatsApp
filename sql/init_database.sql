@@ -128,7 +128,7 @@ RETURNS TABLE(
     resumen TEXT,
     similarity FLOAT,
     metadata JSONB,
-    timestamp TIMESTAMP
+    created_timestamp TIMESTAMP
 ) AS $$
 BEGIN
     RETURN QUERY
@@ -137,7 +137,7 @@ BEGIN
         m.resumen,
         1 - (m.embedding <=> p_embedding) AS similarity,  -- Cosine similarity
         m.metadata,
-        m.timestamp
+        m.timestamp AS created_timestamp
     FROM memoria_episodica m
     WHERE m.user_id = p_user_id
     ORDER BY m.embedding <=> p_embedding  -- Ordena por distancia (menor = más similar)
@@ -719,3 +719,30 @@ SELECT
     COUNT(*) AS registros,
     pg_size_pretty(pg_total_relation_size('auditoria_conversaciones')) AS tamaño
 FROM auditoria_conversaciones;
+
+
+-- =====================================================================
+-- MIGRACIÓN: Columnas de recordatorios 24h y 2h para citas_medicas
+-- =====================================================================
+-- Añade columnas para rastrear el envío de recordatorios
+
+ALTER TABLE citas_medicas 
+ADD COLUMN IF NOT EXISTS recordatorio_24h_enviado BOOLEAN DEFAULT FALSE,
+ADD COLUMN IF NOT EXISTS recordatorio_24h_fecha TIMESTAMP,
+ADD COLUMN IF NOT EXISTS recordatorio_2h_enviado BOOLEAN DEFAULT FALSE,
+ADD COLUMN IF NOT EXISTS recordatorio_2h_fecha TIMESTAMP;
+
+-- Índices para consultas eficientes de recordatorios pendientes
+CREATE INDEX IF NOT EXISTS idx_citas_recordatorios_24h 
+    ON citas_medicas(fecha_hora_inicio, recordatorio_24h_enviado) 
+    WHERE recordatorio_24h_enviado = FALSE AND estado = 'confirmada';
+
+CREATE INDEX IF NOT EXISTS idx_citas_recordatorios_2h 
+    ON citas_medicas(fecha_hora_inicio, recordatorio_2h_enviado) 
+    WHERE recordatorio_2h_enviado = FALSE AND estado = 'confirmada';
+
+-- Comentarios de documentación
+COMMENT ON COLUMN citas_medicas.recordatorio_24h_enviado IS 'Indica si se envió recordatorio 24h antes';
+COMMENT ON COLUMN citas_medicas.recordatorio_24h_fecha IS 'Fecha/hora de envío del recordatorio 24h';
+COMMENT ON COLUMN citas_medicas.recordatorio_2h_enviado IS 'Indica si se envió recordatorio 2h antes';
+COMMENT ON COLUMN citas_medicas.recordatorio_2h_fecha IS 'Fecha/hora de envío del recordatorio 2h';

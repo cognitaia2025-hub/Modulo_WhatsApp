@@ -100,7 +100,7 @@ llm_primary = ChatOpenAI(
 )
 
 llm_fallback = ChatAnthropic(
-    model="claude-3-5-haiku-20241022",
+    model="claude-sonnet-4-20250514",
     temperature=0.3,
     max_tokens=200,
     api_key=os.getenv("ANTHROPIC_API_KEY"),
@@ -128,8 +128,7 @@ def extraer_nombre_con_llm(mensaje: str) -> Optional[str]:
         Nombre extraído o None si falla
     """
     llm_with_structure = llm_extractor.with_structured_output(
-        ExtraccionNombre,
-        method="json_schema"
+        ExtraccionNombre
     )
     
     prompt = f"""Extrae el nombre completo del paciente de este mensaje.

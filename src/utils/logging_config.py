@@ -212,30 +212,98 @@ logger = setup_colored_logging()
 
 def setup_dashboard_integration():
     """
-    Configura integración con dashboard si está disponible.
+    Configura integración con dashboard enviando logs via HTTP.
     
     Llamar desde app.py al iniciar el sistema.
     """
-    try:
-        # Importar dinámicamente para evitar errores si el dashboard no está instalado
-        import sys
-        import os
+    import threading
+    import queue
+    import requests
+    import os
+    
+    # Cola para logs asíncronos
+    log_queue = queue.Queue()
+    dashboard_url = os.getenv('DASHBOARD_URL', 'http://localhost:8000')
+    
+    def log_sender():
+        """Thread que envía logs al dashboard."""
+        while True:
+            try:
+                log_data = log_queue.get(timeout=1)
+                if log_data is None:  # Señal de parada
+                    break
+                try:
+                    requests.post(
+                        f"{dashboard_url}/api/log",
+                        json=log_data,
+                        timeout=1
+                    )
+                except:
+                    pass  # Silenciar errores de conexión
+            except queue.Empty:
+                continue
+    
+    # Iniciar thread de envío
+    sender_thread = threading.Thread(target=log_sender, daemon=True)
+    sender_thread.start()
+    
+    class DashboardLogHandler(logging.Handler):
+        """Handler que envía logs al dashboard."""
         
-        # Agregar el directorio dashboard al path
-        dashboard_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'dashboard', 'backend')
-        if dashboard_path not in sys.path:
-            sys.path.insert(0, dashboard_path)
-        
-        from logger_interceptor import setup_dashboard_logging
-        from main import emit_log
-        
-        setup_dashboard_logging(emit_log)
-        logger.info("✅ Dashboard integration activada")
-        
-    except ImportError as e:
-        logger.debug(f"Dashboard no disponible (normal en producción): {e}")
-    except Exception as e:
-        logger.warning(f"Error al configurar dashboard integration: {e}")
+        def __init__(self):
+            super().__init__()
+            self.current_execution_id = None
+            self.node_start_times = {}
+            
+        def emit(self, record):
+            try:
+                import re
+                from datetime import datetime
+                
+                msg = self.format(record)
+                
+                log_data = {
+                    'timestamp': datetime.now().isoformat(),
+                    'level': record.levelname,
+                    'message': msg,
+                    'execution_id': self.current_execution_id or 'unknown'
+                }
+                
+                # Detectar nodos
+                if 'NODO' in msg or 'nodo' in msg.lower():
+                    # Buscar ID de nodo (n0, n1, n2a, etc)
+                    node_match = re.search(r'\b(n\d+[ab]?|N\d+[AB]?)\b', msg)
+                    if node_match:
+                        node_id = node_match.group(1).lower()
+                        log_data['node_id'] = node_id
+                        
+                        if 'inicio' in msg.lower() or 'entrando' in msg.lower() or 'running' in msg.lower():
+                            log_data['status'] = 'running'
+                            self.node_start_times[node_id] = datetime.now()
+                        elif 'fin' in msg.lower() or 'completado' in msg.lower() or 'saliendo' in msg.lower():
+                            log_data['status'] = 'completed'
+                            if node_id in self.node_start_times:
+                                duration = (datetime.now() - self.node_start_times[node_id]).total_seconds() * 1000
+                                log_data['duration_ms'] = duration
+                
+                # Detectar tipo de usuario
+                if 'doctor' in msg.lower() or 'médico' in msg.lower():
+                    log_data['user_type'] = 'doctor'
+                elif 'paciente' in msg.lower() or 'usuario' in msg.lower():
+                    log_data['user_type'] = 'patient'
+                
+                log_queue.put(log_data)
+                
+            except Exception as e:
+                pass  # Silenciar errores
+    
+    # Configurar handler
+    handler = DashboardLogHandler()
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter('%(message)s'))
+    logging.getLogger().addHandler(handler)
+    
+    logger.info("✅ Dashboard integration activada (HTTP)")
 
 
 # Exportar funciones principales

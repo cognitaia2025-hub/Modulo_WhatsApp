@@ -101,7 +101,7 @@ llm_primary = ChatOpenAI(
 
 # Fallback: Claude Haiku 4.5
 llm_fallback = ChatAnthropic(
-    model="claude-3-5-haiku-20241022",
+    model="claude-sonnet-4-20250514",
     temperature=0.7,
     max_tokens=300,
     api_key=os.getenv("ANTHROPIC_API_KEY"),
@@ -190,11 +190,9 @@ def extraer_parametros_con_llm(tool_id: str, mensaje_usuario: str, tiempo_contex
     logger.info(f"    🔍 Extrayendo parámetros para {tool_id}...")
     
     if tool_id == 'create_calendar_event':
-        # Configurar structured output
+        # Configurar structured output (sin json_schema para compatibilidad)
         llm_with_structure = llm_extractor.with_structured_output(
-            CreateEventParams,
-            method="json_schema",
-            strict=True
+            CreateEventParams
         )
         
         prompt = f"""Extrae información del evento de calendario.

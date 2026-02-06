@@ -28,6 +28,8 @@ except ImportError:
 # Configuración de conexión
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://admin:password123@localhost:5434/agente_whatsapp")
 
+print(f"[DEBUG] Dashboard Backend - DATABASE_URL: {DATABASE_URL}")
+
 router = APIRouter(prefix="/api/database", tags=["Database"])
 
 
@@ -1161,24 +1163,17 @@ async def get_memory_vectors(
     try:
         with get_connection() as conn:
             with conn.cursor() as cur:
-                # Query simple sin filtros dinámicos por ahora
-                # Esto evita problemas con placeholders
+                # Query corregida usando solo columnas que existen en la tabla
                 cur.execute("""
                     SELECT 
                         id,
                         user_id,
-                        COALESCE(nombre_usuario, 'Usuario ' || LEFT(user_id, 8)) as nombre_usuario,
-                        COALESCE(tipo_usuario, 'paciente') as tipo_usuario,
-                        COALESCE(categoria, 'general') as categoria,
                         resumen,
-                        id as embed_base,
-                        fecha_evento,
-                        timestamp,
-                        COALESCE(grupo_visual, user_id) as grupo_visual,
-                        doctor_id,
-                        metadata
+                        embedding,
+                        metadata,
+                        timestamp
                     FROM memoria_episodica
-                    ORDER BY grupo_visual, timestamp DESC
+                    ORDER BY timestamp DESC
                     LIMIT %s
                 """, (limit,))
                 
@@ -1199,65 +1194,32 @@ async def get_memory_vectors(
                 
                 for idx, mem in enumerate(memorias):
                     user = mem['user_id']
-                    grupo = mem['grupo_visual']
+                    user_short = user[:8] if user else f"user_{idx}"
+                    
+                    # Extraer info desde metadata si existe
+                    metadata = mem.get('metadata', {}) or {}
                     
                     # Calcular posición del grupo (usuarios diferentes en círculos diferentes)
-                    if grupo not in usuarios_vistos:
+                    if user not in usuarios_vistos:
                         grupo_idx = len(usuarios_vistos)
                         # Espiral para grupos
-                        angulo_grupo = (grupo_idx / max(len(set(m['grupo_visual'] for m in memorias)), 1)) * 2 * math.pi
-                        usuarios_vistos[grupo] = {
+                        angulo_grupo = (grupo_idx / max(len(set(m['user_id'] for m in memorias)), 1)) * 2 * math.pi
+                        usuarios_vistos[user] = {
                             'offset_x': 30 * math.cos(angulo_grupo),
                             'offset_z': 30 * math.sin(angulo_grupo),
                             'count': 0
                         }
                     
-                    grupo_info = usuarios_vistos[grupo]
+                    grupo_info = usuarios_vistos[user]
                     grupo_info['count'] += 1
                     
-                    # Generar coordenadas basadas en hash (en Python, sin problema de SQL)
-                    embed_base = mem['embed_base']
-                    embed_x = (hash(user) % 60) - 30
-                    embed_y = (hash(mem['resumen'][:50] if mem['resumen'] else '') % 60) - 30
-                    embed_z = ((embed_base * 7) % 60) - 30
+                    # Generar coordenadas basadas en hash del user_id
+                    x_base = hash(user) % 100 - 50
+                    y_base = hash(mem['resumen'][:20]) % 100 - 50
+                    z_base = hash(str(mem['timestamp'])) % 100 - 50
                     
-                    # Posición base + offset del grupo (reducido para mejor clustering)
-                    x = embed_x + grupo_info['offset_x'] * 0.5
-                    z = embed_z + grupo_info['offset_z'] * 0.5
-                    
-                    # Y basado en orden dentro del grupo (no en días, que puede ser muy grande)
-                    # Vectores del mismo grupo estarán cercanos verticalmente
-                    y = embed_y + (grupo_info['count'] * 3)
-                    
-                    # Color según tipo de usuario
-                    color = "#3b82f6" if mem['tipo_usuario'] == 'paciente' else "#ffffff"
-                    
-                    vectors.append({
-                        "id": str(mem['id']),
-                        "vector_number": idx + 1,
-                        "x": round(x, 2),
-                        "y": round(y, 2),
-                        "z": round(z, 2),
-                        "color": color,
-                        "tipo_usuario": mem['tipo_usuario'],
-                        "user_id": mem['user_id'],
-                        "nombre_usuario": mem['nombre_usuario'],
-                        "categoria": mem['categoria'],
-                        "resumen": mem['resumen'],
-                        "label": mem['resumen'][:60] + ('...' if len(mem['resumen']) > 60 else ''),
-                        "fecha_evento": str(mem['fecha_evento']) if mem['fecha_evento'] else None,
-                        "timestamp": mem['timestamp'].isoformat() if mem['timestamp'] else None,
-                        "grupo_visual": mem['grupo_visual'],
-                        "doctor_id": mem['doctor_id'],
-                        "metadata": json.dumps({
-                            "user_id": mem['user_id'],
-                            "nombre": mem['nombre_usuario'],
-                            "tipo": mem['tipo_usuario'],
-                            "categoria": mem['categoria'],
-                            "fecha_evento": str(mem['fecha_evento']) if mem['fecha_evento'] else None,
-                            "grupo": mem['grupo_visual']
-                        })
-                    })
+                    # Agregar a la lista de vectores
+                    vectors.append(vector_data)
                 
                 # Estadísticas por grupo
                 grupos_stats = {
@@ -1274,7 +1236,7 @@ async def get_memory_vectors(
                     "grupos": grupos_stats,
                     "tipos": {
                         "pacientes": sum(1 for v in vectors if v['tipo_usuario'] == 'paciente'),
-                        "doctores": sum(1 for v in vectors if v['tipo_usuario'] == 'doctor')
+                        "doctores": sum(1 for v in vectors if v['tipo_usuario'] != 'paciente')
                     }
                 }
                 

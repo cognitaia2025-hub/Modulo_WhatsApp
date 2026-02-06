@@ -10,18 +10,16 @@ Este directorio contiene el **esquema consolidado** de la base de datos del proy
 
 | Archivo | Descripción | Orden de Ejecución |
 |---------|-------------|-------------------|
-| `init_database.sql` | **Script maestro** con todas las tablas consolidadas | 1️⃣ |
-| `setup_herramientas.sql` | Configuración de herramientas disponibles | 2️⃣ |
-| `setup_memoria_episodica.sql` | Sistema de memoria a largo plazo | 3️⃣ |
-| `setup_user_sessions.sql` | Gestión de sesiones con rolling window | 4️⃣ |
-| `seed_initial_data.sql` | Datos iniciales (admin, doctores, disponibilidad) | 5️⃣ |
+| `init_database.sql` | **Script maestro UNIFICADO** con todas las tablas e índices | 1️⃣ |
+| `init_database_consolidated.py` | Script Python para ejecutar la inicialización completa | 🚀 |
+
+### 📂 Carpeta Archive
+
+Todos los scripts de migración anteriores (`migrate_*.sql`), scripts de configuración individual (`setup_*.sql`) y correcciones temporales (`fix_*.sql`) han sido movidos a la carpeta `sql/archive/` para mantener el directorio raíz limpio. **No deben ser usados para nuevas instalaciones.**
 
 ### 🗑️ Archivos Obsoletos (Ya NO usar)
 
-| Archivo | Status | Razón |
-|---------|--------|-------|
-| `migrate_add_tool_name.sql` | ⚠️ **OBSOLETO** | Ya integrado en `setup_herramientas.sql` |
-| Todos los `migrate_etapa_*.sql` | ⚠️ **OBSOLETOS** | Ya integrados en `init_database.sql` |
+Cualquier cambio estructural debe realizarse directamente sobre `init_database.sql` o mediante este script maestro.
 
 ## 🗄️ Estructura del Esquema
 

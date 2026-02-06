@@ -22,8 +22,8 @@ COMMENT ON EXTENSION vector IS
 -- Esta tabla define las capacidades del agente
 
 CREATE TABLE IF NOT EXISTS herramientas_disponibles (
-    id_tool SERIAL PRIMARY KEY,
-    nombre VARCHAR(100) NOT NULL UNIQUE,
+    id SERIAL PRIMARY KEY,
+    tool_name VARCHAR(100) NOT NULL UNIQUE,
     descripcion TEXT NOT NULL,
     parametros JSONB DEFAULT '{}'::jsonb,
     activa BOOLEAN DEFAULT true,
@@ -39,7 +39,7 @@ COMMENT ON TABLE herramientas_disponibles IS
 'Memoria Procedimental: Catálogo de herramientas que el agente puede ejecutar';
 
 -- Insertar las 5 herramientas de Google Calendar
-INSERT INTO herramientas_disponibles (nombre, descripcion, parametros) VALUES
+INSERT INTO herramientas_disponibles (tool_name, descripcion, parametros) VALUES
 (
     'list_calendar_events',
     'Lista eventos del calendario de Google Calendar en un rango de fechas específico',
@@ -65,7 +65,7 @@ INSERT INTO herramientas_disponibles (nombre, descripcion, parametros) VALUES
     'Obtiene los detalles completos de un evento específico de Google Calendar',
     '{"event_id": "string"}'::jsonb
 )
-ON CONFLICT (nombre) DO NOTHING;
+ON CONFLICT (tool_name) DO NOTHING;
 
 
 -- =====================================================================
@@ -228,6 +228,7 @@ CREATE TABLE IF NOT EXISTS doctores (
     años_experiencia INTEGER DEFAULT 0,
     orden_turno INTEGER DEFAULT 1,
     total_citas_asignadas INTEGER DEFAULT 0,
+    is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -235,6 +236,42 @@ CREATE INDEX IF NOT EXISTS idx_doctores_phone ON doctores(phone_number);
 
 COMMENT ON TABLE doctores IS 
 'Perfiles especializados de médicos con información profesional';
+
+-- Tabla de números temporales de doctores (sistema de cambio de número)
+CREATE TABLE IF NOT EXISTS numeros_temporales_doctores (
+    id SERIAL PRIMARY KEY,
+    doctor_id INTEGER REFERENCES doctores(id) NOT NULL,
+    numero_original VARCHAR(50) NOT NULL,
+    numero_temporal VARCHAR(50) UNIQUE NOT NULL,
+    expira_en TIMESTAMP,
+    creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    CONSTRAINT numero_temporal_valido CHECK (numero_temporal ~ '^\+?\d{10,15}$'),
+    CONSTRAINT numero_original_valido CHECK (numero_original ~ '^\+?\d{10,15}$')
+);
+
+-- Índices para búsqueda rápida de números temporales
+CREATE INDEX IF NOT EXISTS idx_numeros_temporales_doctor 
+    ON numeros_temporales_doctores(doctor_id);
+
+CREATE INDEX IF NOT EXISTS idx_numeros_temporales_numero 
+    ON numeros_temporales_doctores(numero_temporal);
+
+CREATE INDEX IF NOT EXISTS idx_numeros_temporales_expiracion 
+    ON numeros_temporales_doctores(expira_en) 
+    WHERE expira_en IS NOT NULL;
+
+COMMENT ON TABLE numeros_temporales_doctores IS 
+'Números telefónicos temporales para doctores que pierden acceso a su número registrado';
+
+COMMENT ON COLUMN numeros_temporales_doctores.expira_en IS 
+'Fecha de expiración del número temporal. NULL = permanente hasta cambio manual';
+
+COMMENT ON COLUMN numeros_temporales_doctores.numero_temporal IS 
+'Número temporal único que el doctor puede usar para acceder al sistema';
+
+COMMENT ON COLUMN numeros_temporales_doctores.numero_original IS 
+'Número original registrado del doctor en la tabla doctores';
 
 -- Tabla de pacientes (perfil especializado)
 CREATE TABLE IF NOT EXISTS pacientes (
@@ -349,6 +386,67 @@ CREATE INDEX IF NOT EXISTS idx_citas_recordatorios_pendientes
 
 COMMENT ON TABLE citas_medicas IS 
 'Registro completo de citas médicas con sincronización Google Calendar y recordatorios';
+
+
+-- Función para detectar conflictos de horarios
+CREATE OR REPLACE FUNCTION check_conflicto_horario(
+    p_doctor_id INTEGER,
+    p_inicio TIMESTAMP,
+    p_fin TIMESTAMP
+)
+RETURNS TABLE (
+    tiene_conflicto BOOLEAN,
+    cita_id_conflictiva INTEGER,
+    descripcion TEXT
+) AS $$
+BEGIN
+    -- Buscar citas que se traslapen con el horario solicitado
+    -- Excluir citas canceladas
+    RETURN QUERY
+    SELECT 
+        TRUE::BOOLEAN as tiene_conflicto,
+        cm.id as cita_id_conflictiva,
+        CONCAT(
+            'Conflicto con cita ID ', 
+            cm.id, 
+            ' de ',
+            TO_CHAR(cm.fecha_hora_inicio, 'HH24:MI'),
+            ' a ',
+            TO_CHAR(cm.fecha_hora_fin, 'HH24:MI')
+        )::TEXT as descripcion
+    FROM citas_medicas cm
+    WHERE cm.doctor_id = p_doctor_id
+      AND cm.estado != 'cancelada'  -- Ignorar citas canceladas
+      AND (
+          -- Caso 1: Nueva cita empieza durante cita existente
+          (p_inicio >= cm.fecha_hora_inicio AND p_inicio < cm.fecha_hora_fin)
+          OR
+          -- Caso 2: Nueva cita termina durante cita existente
+          (p_fin > cm.fecha_hora_inicio AND p_fin <= cm.fecha_hora_fin)
+          OR
+          -- Caso 3: Nueva cita envuelve completamente a cita existente
+          (p_inicio <= cm.fecha_hora_inicio AND p_fin >= cm.fecha_hora_fin)
+      )
+    LIMIT 1;
+
+    -- Si no hay conflictos, retornar fila indicando disponibilidad
+    IF NOT FOUND THEN
+        RETURN QUERY
+        SELECT 
+            FALSE::BOOLEAN as tiene_conflicto,
+            NULL::INTEGER as cita_id_conflictiva,
+            'Sin conflictos'::TEXT as descripcion;
+    END IF;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+COMMENT ON FUNCTION check_conflicto_horario(INTEGER, TIMESTAMP, TIMESTAMP) IS 
+'Detecta si existe un conflicto de horario para un doctor en un rango de tiempo específico.';
+
+-- Índice para optimizar la función
+CREATE INDEX IF NOT EXISTS idx_citas_doctor_horario_estado 
+ON citas_medicas(doctor_id, fecha_hora_inicio, fecha_hora_fin, estado)
+WHERE estado != 'cancelada';
 
 
 -- =====================================================================
@@ -641,7 +739,30 @@ $$ LANGUAGE plpgsql;
 
 
 -- =====================================================================
--- 11. TABLAS INTERNAS DE LANGGRAPH (Checkpoint Automático)
+-- 11. GESTIÓN DE SESIONES DE USUARIO (Rolling Window)
+-- =====================================================================
+-- Mantiene las sesiones activas basadas en inactividad.
+-- El thread se mantiene activo mientras last_activity < 24h.
+
+CREATE TABLE IF NOT EXISTS user_sessions (
+    user_id VARCHAR(50) NOT NULL,
+    thread_id VARCHAR(100) NOT NULL,
+    phone_number VARCHAR(20),
+    last_activity TIMESTAMP NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    messages_count INTEGER DEFAULT 0,
+    PRIMARY KEY (user_id, thread_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_last_activity ON user_sessions(user_id, last_activity DESC);
+CREATE INDEX IF NOT EXISTS idx_thread_lookup ON user_sessions(thread_id);
+
+COMMENT ON TABLE user_sessions IS 
+'Gestión de sesiones de usuario con ventana de tiempo deslizante (Rolling Window)';
+
+
+-- =====================================================================
+-- 12. TABLAS INTERNAS DE LANGGRAPH (Checkpoint Automático)
 -- =====================================================================
 -- LangGraph creará automáticamente estas tablas al ejecutar setup():
 -- - checkpoints: Estado de cada sesión (TTL 24h)
@@ -653,7 +774,7 @@ $$ LANGUAGE plpgsql;
 
 
 -- =====================================================================
--- 12. FUNCIÓN DE MANTENIMIENTO: Limpieza Automática de Auditoría
+-- 13. FUNCIÓN DE MANTENIMIENTO: Limpieza Automática de Auditoría
 -- =====================================================================
 CREATE OR REPLACE FUNCTION limpiar_auditoria_antigua()
 RETURNS INTEGER AS $$
@@ -678,7 +799,7 @@ COMMENT ON FUNCTION limpiar_auditoria_antigua IS
 
 
 -- =====================================================================
--- 13. VERIFICACIÓN FINAL
+-- 14. VERIFICACIÓN FINAL
 -- =====================================================================
 DO $$
 BEGIN
@@ -746,3 +867,23 @@ COMMENT ON COLUMN citas_medicas.recordatorio_24h_enviado IS 'Indica si se envió
 COMMENT ON COLUMN citas_medicas.recordatorio_24h_fecha IS 'Fecha/hora de envío del recordatorio 24h';
 COMMENT ON COLUMN citas_medicas.recordatorio_2h_enviado IS 'Indica si se envió recordatorio 2h antes';
 COMMENT ON COLUMN citas_medicas.recordatorio_2h_fecha IS 'Fecha/hora de envío del recordatorio 2h';
+
+
+-- =====================================================================
+-- 10. SEED DE DATOS CRÍTICOS (ADMIN Y DOCTOR INICIAL)
+-- =====================================================================
+
+-- Insertar Usuario Administrador (Santiago Ornelas)
+INSERT INTO usuarios (phone_number, display_name, es_admin, tipo_usuario) 
+VALUES ('+526861892910', 'Santiago Ornelas', TRUE, 'admin')
+ON CONFLICT (phone_number) DO UPDATE 
+SET es_admin = TRUE, tipo_usuario = 'admin';
+
+-- Insertar Doctor Administrador (ID 1 forzado para consistencia)
+INSERT INTO doctores (id, phone_number, nombre_completo, especialidad, is_active)
+VALUES (1, '+526861892910', 'Santiago de Jesús Ornelas Reynoso', 'Podología', TRUE)
+ON CONFLICT (id) DO UPDATE 
+SET phone_number = EXCLUDED.phone_number, nombre_completo = EXCLUDED.nombre_completo;
+
+-- Sincronizar secuencia de IDs
+SELECT setval('doctores_id_seq', (SELECT MAX(id) FROM doctores));

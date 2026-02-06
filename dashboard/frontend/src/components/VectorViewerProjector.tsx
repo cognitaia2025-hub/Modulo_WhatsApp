@@ -50,8 +50,12 @@ const CATEGORIA_COLORS: Record<string, string> = {
 };
 
 const getBackendUrl = () => {
+  // Detectar si estamos en desarrollo o producción
   if (window.location.hostname.includes('github.dev')) {
     return window.location.origin.replace('-3000.', '-8000.');
+  }
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    return 'http://localhost:8000';
   }
   return 'http://localhost:8000';
 };

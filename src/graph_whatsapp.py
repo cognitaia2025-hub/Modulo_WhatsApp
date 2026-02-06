@@ -94,47 +94,47 @@ from src.nodes.sincronizador_hibrido_node import nodo_sincronizador_hibrido_wrap
 
 # ==================== FUNCIONES DE DECISIÓN ====================
 
-def decidir_flujo_clasificacion(state: WhatsAppAgentState) -> Literal[
-    "recepcionista",
-    "recuperacion_medica", 
-    "recuperacion_episodica",
-    "generacion_resumen"
-]:
-    """
-    DECISIÓN 1: Flujo de Clasificación (después de N2)
-    
-    Decide la ruta según clasificación y tipo de usuario.
-    
-    Reglas:
-    - solicitud_cita (cualquier usuario) → Recepcionista (N6R)
-    - medica + doctor → Recuperación Médica (N3B) 
-    - personal → Recuperación Episódica (N3A)
-    - chat_casual → Generación Resumen (N6)
-    """
-    clasificacion = state.get('clasificacion_mensaje', '')
-    tipo_usuario = state.get('tipo_usuario', '')
-
-    logger.info(f"🔀 DECISIÓN 1 - Clasificación: {clasificacion}, Usuario: {tipo_usuario}")
-
-    # Caso 1: Solicitud de cita (cualquier usuario) - prioridad máxima
-    if clasificacion in ['solicitud_cita', 'solicitud_cita_paciente']:
-        logger.info("    → Ruta: RECEPCIONISTA (solicitud de cita)")
-        return "recepcionista"
-
-    # Caso 2: Doctor con operación médica
-    elif clasificacion == 'medica' and tipo_usuario == 'doctor':
-        logger.info("    → Ruta: RECUPERACION_MEDICA (doctor + operación médica)")
-        return "recuperacion_medica"
-
-    # Caso 3: Calendario personal (cualquier usuario)
-    elif clasificacion == 'personal':
-        logger.info("    → Ruta: RECUPERACION_EPISODICA (calendario personal)")
-        return "recuperacion_episodica"
-
-    # Caso 4: Chat casual o consulta (sin herramientas)
-    else:
-        logger.info("    → Ruta: GENERACION_RESUMEN (chat casual)")
-        return "generacion_resumen"
+# def decidir_flujo_clasificacion(state: WhatsAppAgentState) -> Literal[
+#     "recepcionista",
+#     "recuperacion_medica", 
+#     "recuperacion_episodica",
+#     "generacion_resumen"
+# ]:
+#     """
+#     DECISIÓN 1: Flujo de Clasificación (después de N2)
+#     
+#     Decide la ruta según clasificación y tipo de usuario.
+#     
+#     Reglas:
+#     - solicitud_cita (cualquier usuario) → Recepcionista (N6R)
+#     - medica + doctor → Recuperación Médica (N3B) 
+#     - personal → Recuperación Episódica (N3A)
+#     - chat_casual → Generación Resumen (N6)
+#     """
+#     clasificacion = state.get('clasificacion_mensaje', '')
+#     tipo_usuario = state.get('tipo_usuario', '')
+#
+#     logger.info(f"🔀 DECISIÓN 1 - Clasificación: {clasificacion}, Usuario: {tipo_usuario}")
+#
+#     # Caso 1: Solicitud de cita (cualquier usuario) - prioridad máxima
+#     if clasificacion in ['solicitud_cita', 'solicitud_cita_paciente']:
+#         logger.info("    → Ruta: RECEPCIONISTA (solicitud de cita)")
+#         return "recepcionista"
+#
+#     # Caso 2: Doctor con operación médica
+#     elif clasificacion == 'medica' and tipo_usuario == 'doctor':
+#         logger.info("    → Ruta: RECUPERACION_MEDICA (doctor + operación médica)")
+#         return "recuperacion_medica"
+#
+#     # Caso 3: Calendario personal (cualquier usuario)
+#     elif clasificacion == 'personal':
+#         logger.info("    → Ruta: RECUPERACION_EPISODICA (calendario personal)")
+#         return "recuperacion_episodica"
+#
+#     # Caso 4: Chat casual o consulta (sin herramientas)
+#     else:
+#         logger.info("    → Ruta: GENERACION_RESUMEN (chat casual)")
+#         return "generacion_resumen"
 
 
 def decidir_tipo_ejecucion(state: WhatsAppAgentState) -> Literal[
@@ -348,16 +348,17 @@ def crear_grafo_whatsapp() -> StateGraph:
     )
     
     # -------------------- DECISIÓN 1: Clasificación LLM (solo casos ambiguos) --------------------
-    workflow.add_conditional_edges(
-        "filtrado_inteligente",
-        decidir_flujo_clasificacion,
-        {
-            "recepcionista": "recepcionista",
-            "recuperacion_medica": "recuperacion_medica",
-            "recuperacion_episodica": "recuperacion_episodica", 
-            "generacion_resumen": "generacion_resumen"
-        }
-    )
+    # NOTA: Este nodo ahora usa Command(goto=...) para navegación dinámica.
+    # workflow.add_conditional_edges(
+    #     "filtrado_inteligente",
+    #     decidir_flujo_clasificacion,
+    #     {
+    #         "recepcionista": "recepcionista",
+    #         "recuperacion_medica": "recuperacion_medica",
+    #         "recuperacion_episodica": "recuperacion_episodica", 
+    #         "generacion_resumen": "generacion_resumen"
+    #     }
+    # )
     
     # Flujos de recuperación → Selección de Herramientas
     workflow.add_edge("recuperacion_medica", "seleccion_herramientas")

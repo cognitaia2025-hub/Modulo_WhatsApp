@@ -22,23 +22,19 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 import psycopg
-from typing import List
+from typing import List, Any, Optional
 import argparse
 
 # Cargar variables de entorno
 load_dotenv()
 
 # Configuración
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5434/agente_whatsapp")
-SQL_DIR = Path(__file__).parent
+DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5434/agente_whatsapp")
+SQL_DIR: Path = Path(__file__).parent
 
 # Lista de archivos SQL en orden de ejecución
-SQL_FILES = [
-    "init_database.sql",
-    "setup_herramientas.sql",
-    "setup_memoria_episodica.sql",
-    "setup_user_sessions.sql",
-    "seed_initial_data.sql"
+SQL_FILES: List[str] = [
+    "init_database.sql"
 ]
 
 def print_header(text: str):
@@ -63,7 +59,7 @@ def print_info(text: str):
     """Imprime mensaje informativo"""
     print(f"ℹ️  {text}")
 
-def execute_sql_file(conn, sql_file: Path, file_name: str):
+def execute_sql_file(conn: psycopg.Connection[Any], sql_file: Path, file_name: str):
     """
     Ejecuta un archivo SQL completo
     
@@ -79,7 +75,7 @@ def execute_sql_file(conn, sql_file: Path, file_name: str):
             sql_content = f.read()
         
         with conn.cursor() as cur:
-            cur.execute(sql_content)
+            cur.execute(sql_content)  # type: ignore[arg-type]
         
         conn.commit()
         print("✅")
@@ -95,18 +91,21 @@ def verify_database_connection(database_url: str) -> bool:
         with psycopg.connect(database_url, connect_timeout=5) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT version()")
-                version = cur.fetchone()[0]
-                print_info(f"PostgreSQL: {version.split(',')[0]}")
-                return True
+                result = cur.fetchone()
+                if result:
+                    version = str(result[0])
+                    print_info(f"PostgreSQL: {version.split(',')[0]}")
+                    return True
+                return False
     except Exception as e:
         print_error(f"No se puede conectar a la base de datos: {e}")
         return False
 
-def verify_pgvector(conn) -> bool:
+def verify_pgvector(conn: psycopg.Connection[Any]) -> bool:
     """Verifica que la extensión pgvector esté disponible"""
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
+            cur.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")  # type: ignore[arg-type]
             result = cur.fetchone()
             if result:
                 print_info(f"Extensión pgvector: {result[0]}")
@@ -118,7 +117,7 @@ def verify_pgvector(conn) -> bool:
         print_warning(f"No se pudo verificar pgvector: {e}")
         return False
 
-def count_tables(conn) -> int:
+def count_tables(conn: psycopg.Connection[Any]) -> int:
     """Cuenta las tablas en el schema public"""
     with conn.cursor() as cur:
         cur.execute("""
@@ -127,7 +126,8 @@ def count_tables(conn) -> int:
             WHERE table_schema = 'public'
                 AND table_type = 'BASE TABLE'
         """)
-        return cur.fetchone()[0]
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
 
 def drop_database_if_exists(database_url: str):
     """Elimina la base de datos si existe (para inicialización limpia)"""
@@ -161,7 +161,7 @@ def drop_database_if_exists(database_url: str):
         print_error(f"Error al recrear base de datos: {e}")
         raise
 
-def show_summary(conn):
+def show_summary(conn: psycopg.Connection[Any]):
     """Muestra un resumen del estado de la base de datos"""
     print_header("RESUMEN DE INICIALIZACIÓN")
     
@@ -174,27 +174,32 @@ def show_summary(conn):
                 WHERE table_schema = 'public'
                     AND table_type = 'BASE TABLE'
             """)
-            total_tables = cur.fetchone()[0]
+            row_tables = cur.fetchone()
+            total_tables = row_tables[0] if row_tables else 0
             print_info(f"Tablas creadas: {total_tables}")
             
             # Contar usuarios
-            cur.execute("SELECT COUNT(*) FROM usuarios")
-            total_users = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM usuarios")  # type: ignore[arg-type]
+            row_users = cur.fetchone()
+            total_users = row_users[0] if row_users else 0
             print_info(f"Usuarios: {total_users}")
             
             # Contar doctores
-            cur.execute("SELECT COUNT(*) FROM doctores")
-            total_doctors = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM doctores")  # type: ignore[arg-type]
+            row_doctors = cur.fetchone()
+            total_doctors = row_doctors[0] if row_doctors else 0
             print_info(f"Doctores: {total_doctors}")
             
             # Contar disponibilidad
-            cur.execute("SELECT COUNT(*) FROM disponibilidad_medica")
-            total_availability = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM disponibilidad_medica")  # type: ignore[arg-type]
+            row_avail = cur.fetchone()
+            total_availability = row_avail[0] if row_avail else 0
             print_info(f"Registros de disponibilidad: {total_availability}")
             
             # Contar herramientas
             cur.execute("SELECT COUNT(*) FROM herramientas_disponibles")
-            total_tools = cur.fetchone()[0]
+            row_tools = cur.fetchone()
+            total_tools = row_tools[0] if row_tools else 0
             print_info(f"Herramientas disponibles: {total_tools}")
             
             # Verificar extensión vector
@@ -203,7 +208,8 @@ def show_summary(conn):
                     SELECT 1 FROM pg_extension WHERE extname = 'vector'
                 )
             """)
-            has_vector = cur.fetchone()[0]
+            row_vector = cur.fetchone()
+            has_vector = row_vector[0] if row_vector else False
             if has_vector:
                 print_success("Extensión pgvector: Instalada")
             else:
@@ -245,7 +251,7 @@ def main():
         sql_files_to_execute.remove("seed_initial_data.sql")
         print_warning("Se omitirá seed_initial_data.sql")
     
-    missing_files = []
+    missing_files: List[str] = []
     for sql_file in sql_files_to_execute:
         file_path = SQL_DIR / sql_file
         if not file_path.exists():

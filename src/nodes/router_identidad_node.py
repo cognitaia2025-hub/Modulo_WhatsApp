@@ -9,7 +9,7 @@ Lógica:
 """
 
 import logging
-from typing import Literal, Dict, Any
+from typing import Dict, Any, cast
 from src.state.agent_state import WhatsAppAgentState
 
 logger = logging.getLogger(__name__)
@@ -27,17 +27,27 @@ def nodo_router_identidad(state: WhatsAppAgentState) -> Dict[str, Any]:
     """
     
     tipo_usuario = state.get('tipo_usuario', '')
+    estado_actual = state.get('estado_conversacion', 'inicial') # ✅ Recuperar estado
     mensaje = _obtener_ultimo_mensaje(state)
     
-    logger.info(f"🔀 ROUTER IDENTIDAD: tipo_usuario='{tipo_usuario}'")
+    logger.info(f"🔀 ROUTER IDENTIDAD: tipo_usuario='{tipo_usuario}', estado='{estado_actual}'")
     logger.info(f"   Mensaje: '{mensaje[:50]}...'")
     
     # ========================================
     # PACIENTES: 70% de casos - RUTA DIRECTA
     # ========================================
     if tipo_usuario == 'paciente_externo':
-        # Pacientes SOLO pueden solicitar citas
-        if _es_saludo_inicial(mensaje):
+        # ✅ Si ya está en un flujo de cita, NO clasificar como saludo
+        if estado_actual in ['recolectando_slots', 'confirmando_cita', 'solicitando_nombre']:
+            logger.info(f"   ♻️  Continuando flujo de cita en estado: {estado_actual}")
+            return {
+                'clasificacion_mensaje': 'solicitud_cita_paciente',
+                'ruta_siguiente': 'recepcionista',
+                'requiere_clasificacion_llm': False
+            }
+        
+        # Solo permitir saludo si el estado es inicial
+        if _es_saludo_inicial(mensaje) and estado_actual == 'inicial':
             ruta = 'respuesta_conversacional'
             clasificacion = 'chat'
             logger.info(f"   → RUTA: {ruta} (saludo paciente)")
@@ -120,16 +130,20 @@ def nodo_router_identidad(state: WhatsAppAgentState) -> Dict[str, Any]:
 
 # ==================== FUNCIONES AUXILIARES ====================
 
-def _obtener_ultimo_mensaje(state: Dict[str, Any]) -> str:
+def _obtener_ultimo_mensaje(state: WhatsAppAgentState) -> str:
     """Extrae el último mensaje del usuario del state."""
+    from langchain_core.messages import BaseMessage
+    
     messages = state.get('messages', [])
     
-    for msg in reversed(messages):
-        # Manejar diferentes formatos de mensajes
-        if hasattr(msg, 'type') and msg.type == 'human':
-            return msg.content
-        elif isinstance(msg, dict) and msg.get('role') == 'user':
-            return msg.get('content', '')
+    for msg_item in reversed(messages):
+        # Manejar BaseMessage de LangChain
+        if isinstance(msg_item, BaseMessage) and msg_item.type == 'human':
+            content = msg_item.content
+            return str(content) if isinstance(content, str) else str(content[0]) if content else ""
+        # Manejar diccionarios planos
+        elif isinstance(msg_item, dict) and msg_item.get('role') == 'user':
+            return str(msg_item.get('content', ''))
     
     return ""
 
@@ -172,7 +186,7 @@ def _es_saludo_inicial(mensaje: str) -> bool:
     return tiene_saludo and not tiene_accion
 
 
-def _clasificar_doctor_rapido(mensaje: str, state: Dict[str, Any]) -> str:
+def _clasificar_doctor_rapido(mensaje: str, state: WhatsAppAgentState) -> str:
     """
     Clasificación RÁPIDA para doctores sin LLM.
     
@@ -225,7 +239,7 @@ def _clasificar_doctor_rapido(mensaje: str, state: Dict[str, Any]) -> str:
         # Revisar contexto episódico para desambiguar
         contexto_previo = state.get('contexto_episodico', {})
         if isinstance(contexto_previo, dict):
-            resumen_previo = contexto_previo.get('resumen', '')
+            resumen_previo = str(contexto_previo.get('resumen', ''))
             
             if 'paciente' in resumen_previo.lower():
                 logger.info(f"      ✓ Clasificación por contexto: MEDICA")
@@ -276,4 +290,4 @@ def nodo_router_identidad_wrapper(state: WhatsAppAgentState) -> WhatsAppAgentSta
     state_actualizado = dict(state)  # Copiar state original
     state_actualizado.update(resultado)  # Agregar campos nuevos
     
-    return state_actualizado
+    return cast(WhatsAppAgentState, state_actualizado)

@@ -12,22 +12,6 @@ from langchain_core.messages import AnyMessage
 class WhatsAppAgentState(TypedDict):
     """
     Estado compartido del agente que fluye a través de todos los nodos.
-    
-    Campos:
-        messages: Historial de conversación
-        user_id: Identificador único del usuario (número de teléfono)
-        session_id: ID de la sesión actual
-        es_admin: Indica si el usuario actual es administrador
-        usuario_info: Diccionario con información completa del usuario desde BD
-        usuario_registrado: True si ya existía, False si fue creado automáticamente
-        tipo_usuario: Tipo de usuario (personal, doctor, paciente_externo, admin)
-        doctor_id: ID del doctor si el usuario es doctor
-        paciente_id: ID del paciente si el usuario tiene registro de paciente
-        contexto_episodico: Resúmenes previos recuperados de pgvector
-        herramientas_seleccionadas: IDs de herramientas a ejecutar
-        requiere_herramientas: Indica si se detectó intención de usar herramientas de calendario
-        resumen_actual: Resumen generado de la conversación
-        timestamp: Marca de tiempo de la interacción
     """
     # Conversación
     messages: Annotated[list[AnyMessage], add_messages]
@@ -76,9 +60,9 @@ class WhatsAppAgentState(TypedDict):
     error_maya: Optional[str]  # Error si Maya falla
     
     # Conversación de Recepcionista (ETAPA 4)
-    estado_conversacion: str = "inicial"  # inicial, solicitando_nombre, mostrando_opciones, esperando_seleccion, confirmando, completado
-    slots_disponibles: List[Dict] = []  # Lista de slots mostrados al paciente
-    paciente_nombre_temporal: Optional[str] = None  # Nombre extraído antes de registro
+    estado_conversacion: str  # inicial, solicitando_nombre, mostrando_opciones, esperando_seleccion, confirmando, completado
+    slots_disponibles: List[Dict[str, Any]]  # Lista de slots mostrados al paciente
+    paciente_nombre_temporal: Optional[str]  # Nombre extraído antes de registro
     
     # Campos para Slot Filling (optimización recepcionista)
     fecha_deseada: Optional[str]  # "lunes", "25 de octubre", "mañana"
